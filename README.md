@@ -55,7 +55,7 @@ npm test
 npm run build    # static site in dist/
 ```
 
-Pushing to `main` runs the tests and deploys to GitHub Pages (turn Pages on under **Settings → Pages → Source: GitHub Actions**).
+Pushing to `master` runs the tests and deploys to GitHub Pages (turn Pages on under **Settings → Pages → Source: GitHub Actions**).
 
 To test with your own save, copy it to `test/fixtures/game.state` (`*.state` files are git-ignored).
 
