@@ -49,6 +49,8 @@ Not modelled:
 2. **Across city borders.** It then scores those plans on the real map, where one city's sawmill can feed a neighbouring city's market, and improves the best ones with a local search: one- and two-tile changes, market + producer + support placed together across a border, and switching a group of producers to another kind. Every layout found is pruned of buildings that add nothing, and the best ones are peeled down one building at a time to fill in the cheaper income levels.
 3. **Build order.** It orders the steps greedily by payback (income gained per star spent, with techs shared across everything they unlock), respecting what the game requires (techs first, terrain actions before building, a sawmill next to a lumber hut, the old market torn down before the new one), then simulates turn by turn with your stars and income.
 
+A typical empire takes a second or two. Very large ones (20 or more cities that share borders) can take half a minute.
+
 Tests check the optimizer against exhaustive search on small maps. On single cities it is exact; across city borders the local search can, rarely, miss a layout that needs several buildings moved at once (the tests allow 2 misses in 18 random two-city maps).
 
 Game rules live in one table in `src/data/rules.ts` (buildings, terrain actions, techs, tribes), so a balance patch is usually a one-line change there or in **Rules and costs**.

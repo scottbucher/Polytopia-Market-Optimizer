@@ -78,7 +78,20 @@ export function makeTechBiller(state: GameState) {
   const canBuyLiteracy = !litOwned && state.settings.allowNewTech;
   const tierSort = (a: TechKey, b: TechKey) => TECH_BY_KEY[a].tier - TECH_BY_KEY[b].tier || TECH_BY_KEY[a].idx - TECH_BY_KEY[b].idx;
 
+  // Bills are asked for the same few tech sets over and over during the search.
+  const memo = new Map<string, TechBill>();
   return (needed: Iterable<TechKey>): TechBill => {
+    const arr = [...needed];
+    const key = arr.join();
+    let bill = memo.get(key);
+    if (!bill) {
+      bill = billOf(arr);
+      if (memo.size < 100_000) memo.set(key, bill);
+    }
+    return bill;
+  };
+
+  function billOf(needed: TechKey[]): TechBill {
     const need = new Set<TechKey>();
     for (const t of needed) for (const k of missingChain(state, t)) need.add(k);
     const plainCost = [...need].reduce((s, t) => s + full.get(t)!, 0);
@@ -97,7 +110,7 @@ export function makeTechBiller(state: GameState) {
     }
     const techs = [...need].sort(tierSort);
     return { techs, cost: plainCost, price: new Map(techs.map((t) => [t, full.get(t)!])), buysLiteracy: false };
-  };
+  }
 }
 
 export type TechBiller = ReturnType<typeof makeTechBiller>;

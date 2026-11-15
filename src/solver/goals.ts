@@ -37,12 +37,10 @@ function incomeAfterBundles(state: GameState, bundles: Action[][]): number[] {
   return out;
 }
 
-/** A few plans spread over the frontier (always the first and last), for the costlier goals. */
-function spread(plans: Plan[], n: number): Plan[] {
-  if (plans.length <= n) return plans;
-  const out = new Set<Plan>();
-  for (let i = 0; i < n; i++) out.add(plans[Math.round((i * (plans.length - 1)) / (n - 1))]);
-  return [...out];
+/** Indices of n plans spread over the frontier (always the first and last). */
+function spreadIdx(len: number, n: number): number[] {
+  if (len <= n) return [...Array(len).keys()];
+  return [...new Set(Array.from({ length: n }, (_, i) => Math.round((i * (len - 1)) / (n - 1))))];
 }
 
 /** The full build order for one plan (used for "max" and when picking another plan). */
@@ -117,8 +115,14 @@ export function evaluateGoal(state: GameState, frontier: Frontier, goal: Goal): 
   // Bank goals: most stars on hand at the deadline.
   const T = goal.turns;
   const bankIfNothing = simulate(state, [], T).starsAtTurn[T];
-  let best: GoalResult | null = null;
-  for (const plan of spread(plans, 6)) {
+  // (Typed with `as`: TypeScript does not see the closure assign it.)
+  let best = null as GoalResult | null;
+  let bestIdx = -1;
+  const tried = new Set<number>();
+  const tryPlan = (pi: number) => {
+    if (tried.has(pi)) return;
+    tried.add(pi);
+    const plan = plans[pi];
     const { bundles: all, skipped } = orderActions(state, plan);
     for (let k = 0; k <= all.length; k++) {
       const bundles = all.slice(0, k);
@@ -128,8 +132,16 @@ export function evaluateGoal(state: GameState, frontier: Frontier, goal: Goal): 
       const bank = schedule.starsAtTurn[T];
       if (!best || bank > best.bankAtDeadline! || (bank === best.bankAtDeadline && schedule.finalIncome > best.schedule.finalIncome)) {
         best = { plan, bundles, schedule, met: true, bankAtDeadline: bank, bankIfNothing, skipped, summary: '' };
+        bestIdx = pi;
       }
     }
+  };
+  // A few plans spread over the frontier, then the neighbours of the best one until nothing improves.
+  for (const i of spreadIdx(plans.length, 6)) tryPlan(i);
+  for (let guard = 0; guard < plans.length; guard++) {
+    const at = bestIdx;
+    for (const d of [-2, -1, 1, 2]) if (at + d >= 0 && at + d < plans.length) tryPlan(at + d);
+    if (bestIdx === at) break;
   }
   if (!best) return null;
   const bank = best.bankAtDeadline!;

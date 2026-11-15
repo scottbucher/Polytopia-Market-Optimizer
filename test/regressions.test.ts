@@ -3,7 +3,8 @@ import { describe, expect, it } from 'vitest';
 import { evaluateGoal } from '../src/solver/goals';
 import { income } from '../src/solver/income';
 import { search } from '../src/solver/search';
-import { orderActions } from '../src/solver/schedule';
+import { runOptimizer } from '../src/solver';
+import { orderActions, simulate } from '../src/solver/schedule';
 import { bruteFrontier } from './brute';
 import { makeState, withBuildings } from './helpers';
 
@@ -108,4 +109,39 @@ describe('build order regressions', () => {
       expect(tooTight.reachedTurn).toBe(t);
     }
   });
+});
+
+describe('round 2 solver findings', () => {
+  const cities = ['0000112', '0001122', '0001122', '0001122', '0000112'];
+  const cityOf = (x: number, y: number) => Number(cities[y][x]);
+
+  it('no frontier plan keeps a building that adds nothing', () => {
+    const s = withBuildings(makeState('f,~f,f.\nfMfffMM\n.C,CmC,\nmmM,fff\nffmmM.f', {
+      tribe: 'aquarion', owned: ['riding', 'roads', 'freespirit', 'chivalry', 'organization', 'farming', 'fishing', 'sailing', 'ramming', 'climbing', 'mining', 'meditation', 'philosophy'],
+      cityCount: 6, stars: 11, baseIncome: 11, allowGrow: false, allowDestroy: false,
+    }, cityOf), { 6: 'sawmill', 7: 'lumberhut', 14: 'other', 25: 'other', 26: 'lumberhut', 30: 'other' });
+    s.tiles[2].resource = 'aquacrop';
+    const o = runOptimizer(s, { kind: 'income', income: 7, turns: 30 });
+    expect(o.result!.skipped).toEqual([]);
+    for (const p of o.frontier.plans) expect(orderActions(s, p).skipped).toEqual([]);
+  }, 60000);
+
+  it('a bank goal finds the best plan on the frontier', () => {
+    const s = withBuildings(makeState('fff~~ff\nMfff.,,\n,C,CfCf\nf..f.,f\n,~M,~,,', {
+      owned: ['organization'], cityCount: 5, stars: 19, baseIncome: 11, allowBurn: false, allowGrow: true, allowDestroy: true,
+    }, cityOf), { 14: 'market', 16: 'windmill', 20: 'lumberhut', 28: 'forge', 33: 'other' });
+    const T = 29;
+    const o = runOptimizer(s, { kind: 'bank', stars: 50, turns: T });
+    let best = -1;
+    for (const p of o.frontier.plans) {
+      const all = orderActions(s, p).bundles;
+      for (let k = 0; k <= all.length; k++) {
+        const sc = simulate(s, all.slice(0, k), T);
+        if (sc.unaffordable || sc.steps.some((x) => x.turn >= T)) break;
+        best = Math.max(best, sc.starsAtTurn[T]);
+      }
+    }
+    // Within 2% of trying every plan (it tries a handful and their neighbours).
+    expect(o.result!.bankAtDeadline!).toBeGreaterThanOrEqual(best * 0.98);
+  }, 60000);
 });

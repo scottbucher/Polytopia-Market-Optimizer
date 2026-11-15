@@ -512,6 +512,19 @@ export function search(state: GameState, opts: SearchOptions): Frontier {
     s.peel();
   }
 
+  // Final prune of every candidate: prune() and peel() record half-pruned layouts on the way,
+  // which can still hold buildings that add nothing.
+  const finals: typeof archive.archive = new Map();
+  for (const [, e] of archive.archive) {
+    const s = new Search(c, e.choice);
+    s.prune();
+    const inc = s.income();
+    const cost = s.cost();
+    const cur = finals.get(inc);
+    if (!cur || cost < cur.cost - 1e-9) finals.set(inc, { cost, choice: [...s.choice] });
+  }
+  archive.archive = finals;
+
   // Frontier: cheapest layout per income level, keeping only levels that cost more than the level below.
   const entries = [...archive.archive.entries()].sort((a, b) => a[0] - b[0]);
   const plans: Plan[] = [];

@@ -82,6 +82,9 @@ function adjacencyNeed(b: BuildingKind): readonly BuildingKind[] | null {
   return null;
 }
 
+/** How many tech-sharing actions a bundle may pull in at each growth step. */
+const TECH_POOL = 12;
+
 const tilesOf = (b: Action[]) => b.filter((x) => x.kind !== 'tech').map((x) => (x as { tile: number }).tile);
 
 /** Build order: list of bundles, each a list of actions in a valid order. */
@@ -246,7 +249,20 @@ export function orderActions(state: GameState, plan: Plan): Order {
           stamp[m] = gen;
           for (const x of byTile.get(m) ?? []) pool.add(x);
         }
-      for (const x of d.list) if (x.kind === 'tech' && !owned.has(x.tech)) for (const y of byTech.get(x.tech) ?? []) pool.add(y);
+      // Actions that share an unbought tech with the bundle: only the nearest few, which
+      // keeps this linear on big maps (the far ones get their turn in their own bundle).
+      const tiles = tilesOf(d.list);
+      const dist = (t: number) => {
+        let best = Infinity;
+        for (const u of tiles) best = Math.min(best, Math.max(Math.abs((t % W) - (u % W)), Math.abs(Math.floor(t / W) - Math.floor(u / W))));
+        return best;
+      };
+      for (const x of d.list) {
+        if (x.kind !== 'tech' || owned.has(x.tech)) continue;
+        const sharing = (byTech.get(x.tech) ?? []).filter((y) => !done.has(y.id) && !d.ids.has(y.id));
+        const near = sharing.length <= TECH_POOL ? sharing : sharing.map((y) => [dist((y as { tile: number }).tile), y] as const).sort((a, b) => a[0] - b[0]).slice(0, TECH_POOL).map((z) => z[1]);
+        for (const y of near) pool.add(y);
+      }
       let improved: { d: Draft; e: ReturnType<typeof evaluate> } | null = null;
       for (const c of pool) {
         if (done.has(c.id) || d.ids.has(c.id)) continue;
@@ -287,7 +303,8 @@ export function orderActions(state: GameState, plan: Plan): Order {
         const e = evaluate(d);
         if (!pick || e.score > pick.score + 1e-9 || (Math.abs(e.score - pick.score) <= 1e-9 && e.cost < pick.cost)) pick = { d, score: e.score, cost: e.cost };
       }
-      const piece = pick ? pick.d.list : left; // (left = only techs remain)
+      // No piece qualifies when only techs remain. `left` keeps the bundle's order, which\n      // need() built prerequisites first, so it is still a valid order.
+      const piece = pick ? pick.d.list : left;
       for (const a of piece) commit(a);
       out.push(piece);
     }
