@@ -4,7 +4,7 @@
   --ink: #1f2328;
   --muted: #646b73;
   --line: #ddd6c8;
-  --accent: #c47f00;
+  --accent: #9a6200;
   --accent-ink: #ffffff;
   --accent-soft: #fbefd3;
   --warn: #b54708;
@@ -242,10 +242,14 @@ main {
   min-width: 0;
   position: sticky;
   top: 8px;
+  /* Pinned, but never taller than the window, so everything in it stays reachable. */
+  max-height: calc(100vh - 16px);
+  overflow: auto;
 }
 @media (max-width: 980px) {
   .mapcol {
     position: static;
+    max-height: none;
   }
 }
 
@@ -528,6 +532,8 @@ details.panel[open] > summary {
   border: 1px solid var(--accent);
 }
 .tech small {
+  font-size: 11.5px;
+  white-space: nowrap;
   color: var(--muted);
 }
 .techtree-actions {
@@ -577,7 +583,8 @@ details.panel[open] > summary {
   font-size: 14px;
 }
 .goal .inline input {
-  width: 64px;
+  width: 7ch;
+  min-width: 64px;
 }
 .toggles {
   border: none;
@@ -837,4 +844,32 @@ footer {
     width: 22px;
     height: 22px;
   }
+}
+
+.maplabels text {
+  paint-order: stroke;
+  stroke: var(--panel);
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
+.maplabels .inc {
+  font-size: 10px;
+  font-weight: 700;
+  text-anchor: middle;
+  fill: var(--ink);
+}
+.stale-note {
+  margin: 0 0 8px;
+}
+.results.stale > :not(.stale-note) {
+  opacity: 0.55;
+}
+.frontier .pickbtn {
+  all: unset;
+  cursor: pointer;
+  font-weight: 600;
+}
+.frontier .pickbtn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }

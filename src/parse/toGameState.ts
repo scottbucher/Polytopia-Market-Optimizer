@@ -60,15 +60,13 @@ export function techsFromIdx(ids: number[]): TechKey[] {
 export interface HumanPlayer {
   id: number;
   name: string;
-  tribe: number;
-  cities: number;
 }
 
 /** Players controlled by a person (not the AI). */
 export function humanPlayers(save: RawSave): HumanPlayer[] {
   return save.players
     .filter((p) => !p.autoPlay && p.id !== 0 && p.id !== 255)
-    .map((p) => ({ id: p.id, name: p.name, tribe: p.tribe, cities: p.numCities }));
+    .map((p) => ({ id: p.id, name: p.name }));
 }
 
 export interface LoadReport {

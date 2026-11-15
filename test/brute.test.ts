@@ -57,6 +57,8 @@ describe('matches brute force (two cities, random maps)', () => {
     }
     if (misses.length) console.log(misses.join('\n'));
     expect(compared).toBeGreaterThanOrEqual(15);
+    // Deterministic: today exactly these 2 maps miss (both need several buildings moved
+    // at once). Tighten this when the search improves; never loosen it.
     expect(exact).toBeGreaterThanOrEqual(compared - 2);
     expect(topOk).toBeGreaterThanOrEqual(compared - 1);
   }, 120000);

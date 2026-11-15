@@ -1,5 +1,5 @@
 /** Largest decompressed save we accept (real saves are well under 1 MB). */
-export const MAX_STATE_BYTES = 32 * 1024 * 1024;
+export const MAX_STATE_BYTES = 8 * 1024 * 1024;
 
 const TRUNCATED = 'The save file is cut short (LZ4 data ends early).';
 
@@ -50,43 +50,25 @@ export function lz4DecompressBlock(src: Uint8Array, maxOut: number): Uint8Array 
 }
 
 /**
- * Polytopia .state files: 1 header byte whose top two bits give the size of a
- * little-endian "extra bytes" field (2 or 4), then an LZ4 block. Decompressed
- * size = compressed size + extra bytes.
+ * Polytopia .state files use the LZ4 "pickle" container: 1 header byte whose top two
+ * bits give the size of a little-endian "extra bytes" field (0, 1, 2 or 4), then an LZ4
+ * block. Decompressed size = compressed size + extra bytes. With no extra bytes the
+ * data is stored uncompressed.
  */
 export function decompressState(bytes: Uint8Array): Uint8Array {
   if (bytes.length < 16) throw new Error('This file is too small to be a Polytopia save.');
   const first = bytes[0];
   let size = (first >> 6) & 3;
   if (size === 3) size = 4;
-  if (size !== 2 && size !== 4) throw new Error('Not a Polytopia save file (unknown header).');
+  const offset = 1 + size;
   const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   // Read as signed: real saves always grow when decompressed, so this equals the unsigned value.
-  const diff = size === 4 ? dv.getInt32(1, true) : dv.getUint16(1, true);
-  const offset = 1 + size;
+  const diff = size === 4 ? dv.getInt32(1, true) : size === 2 ? dv.getUint16(1, true) : size === 1 ? bytes[1] : 0;
+  if (diff === 0) {
+    if (bytes.length - offset > MAX_STATE_BYTES) throw new Error('This file is too large to be a Polytopia save.');
+    return bytes.slice(offset);
+  }
   const outSize = bytes.length - offset + diff;
   if (outSize <= 0) throw new Error('Not a Polytopia save file (bad size).');
   return lz4DecompressBlock(bytes.subarray(offset), outSize);
-}
-
-/** Compress into the same container (literals only). Used by tests to build save fixtures. */
-export function compressStateLiteral(data: Uint8Array): Uint8Array {
-  // One sequence of literals: token 0xF0, then the length in 255-steps.
-  const parts: number[] = [0xf0];
-  let n = data.length - 15;
-  while (n >= 255) {
-    parts.push(255);
-    n -= 255;
-  }
-  parts.push(n);
-  const block = new Uint8Array(parts.length + data.length);
-  block.set(parts, 0);
-  block.set(data, parts.length);
-  const diff = data.length - block.length; // negative: literals-only blocks grow
-  // The container stores (decompressed - compressed), so a 4-byte field is needed when negative.
-  const out = new Uint8Array(5 + block.length);
-  out[0] = 0xc0;
-  new DataView(out.buffer).setInt32(1, diff, true);
-  out.set(block, 5);
-  return out;
 }

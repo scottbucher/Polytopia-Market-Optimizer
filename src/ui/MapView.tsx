@@ -99,6 +99,8 @@ export function MapView({ state, view, overlay, highlight, onPaint, onHover, bac
   const bounds = useMemo(() => mapBounds(view, w, h), [view, w, h]);
   const painting = useRef(false);
   const [cursor, setCursor] = useState<number | null>(null);
+  const cursorRef = useRef<SVGPolygonElement>(null);
+  const [focused, setFocused] = useState(false);
 
   // Keyboard: arrow keys move a cursor over the tiles (in screen directions), Enter or Space paints.
   const onKeyDown = (e: React.KeyboardEvent) => {
@@ -129,6 +131,7 @@ export function MapView({ state, view, overlay, highlight, onPaint, onHover, bac
         }
       setCursor(best);
       onHover?.(best);
+      requestAnimationFrame(() => cursorRef.current?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' }));
     } else if ((e.key === 'Enter' || e.key === ' ') && cursor !== null && onPaint) {
       e.preventDefault();
       onPaint(cursor, true);
@@ -202,7 +205,14 @@ export function MapView({ state, view, overlay, highlight, onPaint, onHover, bac
       }}
       tabIndex={0}
       onKeyDown={onKeyDown}
-      onBlur={() => setCursor(null)}
+      onBlur={() => setFocused(false)}
+      onFocus={() => {
+        setFocused(true);
+        // Show the cursor straight away (where it was last, or the middle of the map).
+        const c = cursor ?? Math.floor(h / 2) * w + Math.floor(w / 2);
+        setCursor(c);
+        onHover?.(c);
+      }}
       role="application"
       aria-label={`Map, ${w} by ${h} tiles. Arrow keys move the cursor${onPaint ? ', Enter paints with the selected tool' : ''}.`}
     >
@@ -253,7 +263,6 @@ export function MapView({ state, view, overlay, highlight, onPaint, onHover, bac
           const planned = overlay?.layout[i] ?? null;
           const existing = t.improvement;
           const removed = overlay?.removed.has(i);
-          const steps = overlay?.steps.get(i);
           const els: React.ReactNode[] = [];
           if (existing === 'city') {
             const ci = state.cities.findIndex((c) => c.y * w + c.x === i);
@@ -261,7 +270,7 @@ export function MapView({ state, view, overlay, highlight, onPaint, onHover, bac
           } else if (overlay) {
             if (planned) {
               const isNew = planned !== existing;
-              els.push(<Badge key="b" kind={planned} cx={cx} cy={cy} ghost={isNew} income={overlay.marketIncome.get(i)} />);
+              els.push(<Badge key="b" kind={planned} cx={cx} cy={cy} ghost={isNew} />);
             } else if (existing === 'other') {
               els.push(<Other key="o" cx={cx} cy={cy} />);
             }
@@ -270,16 +279,6 @@ export function MapView({ state, view, overlay, highlight, onPaint, onHover, bac
             els.push(<Badge key="b" kind={existing} cx={cx} cy={cy} ghost={false} />);
           } else if (existing === 'other') {
             els.push(<Other key="o" cx={cx} cy={cy} />);
-          }
-          if (steps?.length) {
-            els.push(
-              <g key="s" className="stepnum">
-                <circle cx={cx + 17} cy={cy - 11} r={8} />
-                <text x={cx + 17} y={cy - 7.5}>
-                  {steps[0]}
-                </text>
-              </g>,
-            );
           }
           return els.length ? <g key={i}>{els}</g> : null;
         })}
@@ -297,11 +296,42 @@ export function MapView({ state, view, overlay, highlight, onPaint, onHover, bac
           );
         })}
       </g>
+      {/* Step numbers and market income on top of everything, with a halo. */}
+      {overlay && (
+        <g pointerEvents="none" className="maplabels">
+          {order.map((i) => {
+            const [cx, cy] = tileCenter(view, w, h, i);
+            const steps = overlay.steps.get(i);
+            const inc = overlay.marketIncome.get(i);
+            if (!steps?.length && inc === undefined) return null;
+            // The step that finishes the tile (its building), with earlier ones listed in the tooltip.
+            const last = steps?.[steps.length - 1];
+            return (
+              <g key={i}>
+                {inc !== undefined && (
+                  <text className="inc" x={cx} y={cy - 12}>
+                    +{inc}★
+                  </text>
+                )}
+                {last !== undefined && (
+                  <g className="stepnum">
+                    <title>{`Step${steps!.length > 1 ? 's' : ''} ${steps!.join(', ')}`}</title>
+                    <circle cx={cx + 17} cy={cy - 11} r={8} />
+                    <text x={cx + 17} y={cy - 7.5}>
+                      {last}
+                    </text>
+                  </g>
+                )}
+              </g>
+            );
+          })}
+        </g>
+      )}
       {highlight != null && (
         <polygon className="hl-ring" points={diamond(...tileCenter(view, w, h, highlight), 1.08)} pointerEvents="none" />
       )}
-      {cursor != null && cursor !== highlight && (
-        <polygon className="hl-ring cursor" points={diamond(...tileCenter(view, w, h, cursor), 1.08)} pointerEvents="none" />
+      {focused && cursor != null && cursor < state.tiles.length && (
+        <polygon ref={cursorRef} className="hl-ring cursor" points={diamond(...tileCenter(view, w, h, cursor), 1.08)} pointerEvents="none" />
       )}
     </svg>
   );
@@ -343,7 +373,7 @@ function Metal({ cx, cy }: { cx: number; cy: number }) {
   return <polygon className="metal" points={`${cx + 9},${cy - 2} ${cx + 13},${cy + 2} ${cx + 9},${cy + 6} ${cx + 5},${cy + 2}`} />;
 }
 
-function Badge({ kind, cx, cy, ghost, income }: { kind: BuildingKind; cx: number; cy: number; ghost: boolean; income?: number }) {
+function Badge({ kind, cx, cy, ghost }: { kind: BuildingKind; cx: number; cy: number; ghost: boolean }) {
   return (
     <g className={`bld b-${kind}${ghost ? ' ghost' : ''}`}>
       <title>{BUILDING_NAMES[kind]}</title>
@@ -351,11 +381,6 @@ function Badge({ kind, cx, cy, ghost, income }: { kind: BuildingKind; cx: number
       <text x={cx} y={cy + 3}>
         {BUILDING_ABBR[kind]}
       </text>
-      {income !== undefined && (
-        <text className="inc" x={cx} y={cy - 12}>
-          +{income}★
-        </text>
-      )}
     </g>
   );
 }

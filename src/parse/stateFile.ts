@@ -23,8 +23,16 @@ class Reader {
   f32() { this.need(4); const v = this.dv.getFloat32(this.pos, true); this.pos += 4; return v; }
   bytes(n: number) { this.need(n); const v = this.buf.subarray(this.pos, this.pos + n); this.pos += n; return v; }
   skip(n: number) { this.need(n); this.pos += n; }
+  /** .NET BinaryWriter string: 7-bit varint length, then UTF-8 bytes. */
   str() {
-    const n = this.u8();
+    let n = 0;
+    for (let shift = 0; ; shift += 7) {
+      if (shift > 28) throw new Error('Bad string length in save file');
+      const b = this.u8();
+      n |= (b & 0x7f) << shift;
+      if (!(b & 0x80)) break;
+    }
+    if (n > 4096) throw new Error('Bad string length in save file');
     return new TextDecoder().decode(this.bytes(n));
   }
 }
@@ -95,7 +103,7 @@ function readHeader(r: Reader, knownVersion?: number): RawHeader {
     // Skip the few separator bytes between the initial and current blocks.
     const from = r.pos;
     let found = -1;
-    for (let off = from; off < from + 16 && off + 4 <= r.length; off++) {
+    for (let off = from; off < from + 32 && off + 4 <= r.length; off++) {
       r.pos = off;
       if (r.u32() === knownVersion) {
         found = off;
@@ -109,6 +117,7 @@ function readHeader(r: Reader, knownVersion?: number): RawHeader {
   const version = r.u32();
   r.u16(); // total actions
   const currentTurn = r.u32();
+  if (currentTurn > 100_000) throw new Error('Could not read the turn number. This save version may not be supported.');
   // The rest of the fixed header (game settings) has grown across game versions, so
   // instead of trusting a fixed layout we look for the map name string: a length
   // byte followed by that many printable characters, then the map's square size.
@@ -324,7 +333,7 @@ function checkPlayers(players: RawPlayer[], tiles: RawTile[][]): string | null {
   for (const p of players) {
     if (p.tribe >= 64) return `odd tribe ${p.tribe}`;
     if (p.numCities >= 1000) return 'odd city count';
-    if (p.techs.some((t) => t >= 64)) return 'odd tech id';
+    if (p.techs.some((t) => t >= 256)) return 'odd tech id';
   }
   for (const row of tiles)
     for (const t of row) {

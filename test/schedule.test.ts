@@ -5,6 +5,7 @@ import { currentLayout, type Plan } from '../src/solver/exact';
 import { evaluateGoal } from '../src/solver/goals';
 import { income, neighborTable } from '../src/solver/income';
 import { type Action, orderActions, planActions, simulate } from '../src/solver/schedule';
+import { runOptimizer } from '../src/solver';
 import { search } from '../src/solver/search';
 import { rng } from './brute';
 import { makeState, withBuildings } from './helpers';
@@ -139,6 +140,47 @@ describe('goals', () => {
     const r = evaluateGoal(s, f, { kind: 'bank', stars: 1, turns: 12 })!;
     expect(r.schedule.steps.every((x) => x.turn < 12)).toBe(true);
     expect(r.bankAtDeadline).toBe(r.schedule.starsAtTurn[12]);
+  });
+
+  it('an income goal stops building once the target is reached', () => {
+    for (const target of [1, 2, 3, 4, f.maxIncome]) {
+      const r = evaluateGoal(s, f, { kind: 'income', income: target, turns: 30 })!;
+      expect(r.schedule.finalIncome, `target ${target}`).toBeGreaterThanOrEqual(target);
+      expect(simulate(s, r.bundles.slice(0, -1)).finalIncome, `target ${target}`).toBeLessThan(target);
+    }
+  });
+
+  it('an income goal picks the fastest of the plans that reach it', () => {
+    for (const target of [2, 4, f.maxIncome]) {
+      const goal = { kind: 'income', income: target, turns: 30 } as const;
+      const r = evaluateGoal(s, f, goal)!;
+      for (const p of f.plans.filter((x) => x.income >= target).slice(0, 4)) {
+        const alone = evaluateGoal(s, { plans: [p], maxIncome: p.income }, goal)!;
+        expect(r.reachedTurn!).toBeLessThanOrEqual(alone.reachedTurn!);
+      }
+    }
+  });
+
+  it('bank goals never finish a step on the deadline turn, and never do worse than saving', () => {
+    for (let T = 1; T <= 30; T++) {
+      const r = evaluateGoal(s, f, { kind: 'best-by', turns: T })!;
+      expect(r.schedule.steps.every((x) => x.turn < T), `turn ${T}`).toBe(true);
+      expect(r.bankAtDeadline!).toBeGreaterThanOrEqual(r.bankIfNothing!);
+    }
+  });
+
+  it('the per-goal search does at least as well as a generic one', () => {
+    for (const goal of [
+      { kind: 'income', income: 3, turns: 30 },
+      { kind: 'best-by', turns: 15 },
+      { kind: 'best-by', turns: 40 },
+      { kind: 'bank', stars: 50, turns: 25 },
+    ] as const) {
+      const mine = runOptimizer(s, goal).result!;
+      const generic = evaluateGoal(s, f, goal)!;
+      if (goal.kind === 'income') expect(mine.reachedTurn!).toBeLessThanOrEqual(generic.reachedTurn!);
+      else expect(mine.bankAtDeadline!, JSON.stringify(goal)).toBeGreaterThanOrEqual(generic.bankAtDeadline!);
+    }
   });
 
   it('a market you already have is never torn down without destroy allowed', () => {

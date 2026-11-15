@@ -55,16 +55,21 @@ export function parseJson(text: string): GameState {
     throw new Error('This file is not a market planner map.');
   }
   if (s.format !== undefined && s.format > MAP_FORMAT) throw new Error('This map was saved by a newer version of the app.');
-  const cities: City[] = (Array.isArray(s.cities) ? s.cities : [])
-    .filter((c) => c && Number.isInteger(c.x) && Number.isInteger(c.y) && c.x >= 0 && c.y >= 0 && c.x < w! && c.y < h!)
-    .map((c, i) => ({ name: typeof c.name === 'string' ? c.name : `City ${i + 1}`, x: c.x, y: c.y }));
+  // Cities off the map are dropped; `newIndex` maps each saved city index to its new one.
+  const cities: City[] = [];
+  const newIndex = new Map<number, number>();
+  (Array.isArray(s.cities) ? s.cities : []).forEach((c, i) => {
+    if (!c || !Number.isInteger(c.x) || !Number.isInteger(c.y) || c.x < 0 || c.y < 0 || c.x >= w! || c.y >= h!) return;
+    newIndex.set(i, cities.length);
+    cities.push({ name: typeof c.name === 'string' ? c.name : `City ${cities.length + 1}`, x: c.x, y: c.y });
+  });
   const tiles: Tile[] = s.tiles.map((t) => {
     const city = t?.city;
     return {
       terrain: pick(t?.terrain, TERRAINS, 'unknown'),
       resource: pick(t?.resource, RESOURCES, 'none'),
       improvement: pick(t?.improvement, IMPROVEMENTS, 'none'),
-      city: Number.isInteger(city) && city! >= 0 && city! < cities.length ? city! : null,
+      city: Number.isInteger(city) ? (newIndex.get(city!) ?? null) : null,
     };
   });
   const d = defaultSettings();

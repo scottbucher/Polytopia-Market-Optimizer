@@ -50,7 +50,8 @@ export default function App() {
 
   useEffect(() => saveLocal(state), [state]);
 
-  const stateKey = useMemo(() => JSON.stringify(state), [state]);
+  // What a solve depends on: the map, settings and the goal.
+  const stateKey = useMemo(() => JSON.stringify([state, goal]), [state, goal]);
   const stale = opt.solved !== null && opt.solved.stateKey !== stateKey;
   const s = state.settings;
   const tribe = TRIBE_BY_KEY[s.tribe];
@@ -82,6 +83,7 @@ export default function App() {
   const loadSaveFile = async (f: File) => {
     setError(null);
     setNotice(null);
+    setPendingSave(null);
     try {
       const save = parseStateFile(new Uint8Array(await f.arrayBuffer()));
       const humans = humanPlayers(save);
@@ -196,13 +198,16 @@ export default function App() {
       </header>
 
       {pendingSave && (
-        <div className="banner">
+        <div className="banner" role="status">
           This save has more than one human player. Who are you?
           {humanPlayers(pendingSave.save).map((p) => (
             <button key={p.id} type="button" onClick={() => applySave(pendingSave.save, p.id, pendingSave.name)}>
               {p.name || `Player ${p.id}`}
             </button>
           ))}
+          <button type="button" className="link" onClick={() => setPendingSave(null)}>
+            Cancel
+          </button>
         </div>
       )}
       {notice && (
@@ -274,7 +279,7 @@ export default function App() {
               </option>
               {state.cities.map((c, i) => (
                 <option key={i} value={i}>
-                  Belongs to {c.name}
+                  Belongs to {c.name.trim() || `City ${i + 1}`}
                 </option>
               ))}
               <option value="null">Not yours</option>
@@ -301,7 +306,7 @@ export default function App() {
             />
           </div>
           <div className="mapfoot">
-            <span className="muted small" aria-live="polite">
+            <span className="muted small">
               {hoverInfo ?? `${state.source ?? ''} · ${state.width}×${state.height}`}
             </span>
             {shown && !stale && (
@@ -439,16 +444,15 @@ export default function App() {
               {busy ? 'Working…' : opt.solved ? 'Solve again' : 'Find the best layout'}
             </button>
             {state.cities.length === 0 && <p className="small muted">Add at least one city to the map first.</p>}
-            {stale && <p className="small warn">You changed something since the last solve. Solve again to update.</p>}
+            {stale && <p className="small warn">You changed the map, settings or goal since the last solve. Solve again to update.</p>}
           </section>
 
           {shown && opt.solved && (
             <section className="panel open">
               <h2>Plan</h2>
               <ResultsPanel
-                key={`${opt.solved.runId}:${selectedIndex}`}
+                key={opt.solved.runId}
                 state={state}
-                goal={goal}
                 result={shown}
                 frontier={opt.solved.frontier.plans}
                 currentIncome={curIncome}
@@ -521,6 +525,17 @@ function NewMap({ onCreate, onExample }: { onCreate: (w: number, h: number) => v
   const [size, setSize] = useState(16);
   const ref = useRef<HTMLDetailsElement>(null);
   const close = () => ref.current?.removeAttribute('open');
+  // Close on Escape or a click outside.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && close();
+    const onClick = (e: MouseEvent) => ref.current && !ref.current.contains(e.target as Node) && close();
+    document.addEventListener('keydown', onKey);
+    document.addEventListener('mousedown', onClick);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('mousedown', onClick);
+    };
+  }, []);
   return (
     <details className="newmap" ref={ref}>
       <summary className="btn secondary">New map</summary>

@@ -1,6 +1,6 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { techName } from '../data/rules';
-import type { GameState, Goal } from '../model/types';
+import type { GameState } from '../model/types';
 import type { Plan } from '../solver/exact';
 import type { GoalResult } from '../solver/goals';
 import type { Step } from '../solver/schedule';
@@ -8,7 +8,6 @@ import { describeAction, starText } from './describe';
 
 interface Props {
   state: GameState;
-  goal: Goal;
   result: GoalResult;
   frontier: Plan[];
   currentIncome: number;
@@ -24,6 +23,8 @@ interface Props {
 
 export function ResultsPanel({ state, result, frontier, currentIncome, selected, onSelect, onHoverTile, ms, stale, loading }: Props) {
   const [done, setDone] = useState<Set<number>>(new Set());
+  // A different plan or result starts with nothing ticked.
+  useEffect(() => setDone(new Set()), [result]);
   const steps = result.schedule.steps;
   const spend = steps.reduce((s, x) => s + x.action.cost, 0);
   // Techs actually in this build order (a goal can stop before the whole plan).
@@ -43,8 +44,11 @@ export function ResultsPanel({ state, result, frontier, currentIncome, selected,
   }, [steps]);
 
   return (
-    <section className="results" aria-live="polite">
-      <p className={`summary${result.met ? '' : ' warn'}`}>{result.summary}</p>
+    <section className={`results${stale ? ' stale' : ''}`}>
+      {stale && <p className="small warn stale-note">This plan is out of date: the map, settings or goal changed. Solve again to update it.</p>}
+      <p className={`summary${result.met ? '' : ' warn'}`} aria-live="polite">
+        {result.summary}
+      </p>
       <div className="stats">
         <Stat label="Market income" value={`${currentIncome} → ${finalIncome}★`} sub={gain > 0 ? `+${gain} per turn` : 'no change'} />
         <Stat
@@ -140,15 +144,12 @@ export function ResultsPanel({ state, result, frontier, currentIncome, selected,
             </thead>
             <tbody>
               {frontier.map((p, i) => (
-                <tr
-                  key={i}
-                  className={`${i === selected ? 'sel' : ''}${stale || loading ? ' off' : ''}`}
-                  aria-selected={i === selected}
-                  onClick={() => !stale && !loading && onSelect(i)}
-                  tabIndex={stale ? -1 : 0}
-                  onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && !stale && !loading && onSelect(i)}
-                >
-                  <td>{p.income}★</td>
+                <tr key={i} className={`${i === selected ? 'sel' : ''}${stale || loading ? ' off' : ''}`} onClick={() => !stale && !loading && onSelect(i)}>
+                  <td>
+                    <button type="button" className="pickbtn" aria-pressed={i === selected} disabled={stale || loading} aria-label={`Show the ${p.income}★ plan`}>
+                      {p.income}★
+                    </button>
+                  </td>
                   <td>{p.cost}★</td>
                   <td>{p.techs.map((t) => techName(t, state.settings.tribe)).join(', ') || '—'}</td>
                 </tr>

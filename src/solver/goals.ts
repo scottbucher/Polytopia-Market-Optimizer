@@ -55,7 +55,7 @@ export function planResult(state: GameState, plan: Plan, summary?: string): Goal
     schedule,
     met: true,
     skipped,
-    summary: summary ?? `This plan earns ${plan.income}★ per turn from markets for ${plan.cost}★ in total.`,
+    summary: summary ?? (plan.changes.length === 0 ? `Build nothing: your markets keep making ${plan.income}★ per turn.` : `This plan earns ${plan.income}★ per turn from markets for ${plan.cost}★ in total.`),
   };
 }
 
@@ -107,10 +107,10 @@ export function evaluateGoal(state: GameState, frontier: Frontier, goal: Goal): 
     }
     const t = best.reachedTurn!;
     best.summary = best.met
-      ? `You can be collecting ${target}★ per turn from markets on turn ${t} (${t === 1 ? 'next turn' : `${t} turns from now`}).`
+      ? `You can be collecting ${target}★ per turn from markets on turn ${t} (${t === 1 ? 'next turn' : `${t} turns from now`}). Markets pay at the start of the turn after they are built.`
       : t === Infinity
         ? `You can't afford to get there with your current income.`
-        : `Not possible within ${goal.turns} turns. The fastest plan gets there on turn ${t}.`;
+        : `Not possible ${goal.turns === 0 ? 'this turn' : `within ${goal.turns} turn${goal.turns === 1 ? '' : 's'}`}. The fastest plan gets there on turn ${t}.`;
     return best;
   }
 

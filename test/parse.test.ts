@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { compressStateLiteral, decompressState, lz4DecompressBlock } from '../src/parse/lz4';
-import { parseStateFile } from '../src/parse/stateFile';
-import { humanPlayers, toGameState } from '../src/parse/toGameState';
+import { decompressState, lz4DecompressBlock } from '../src/parse/lz4';
+import { compressState, compressStateLiteral, lz4CompressBlock } from './lz4Writer';
+import { parseStateFile, type RawSave, type RawTile } from '../src/parse/stateFile';
+import { humanPlayers, techsFromIdx, toGameState } from '../src/parse/toGameState';
+
+function fogTile(x: number, y: number, p: Partial<RawTile>): RawTile {
+  return { x, y, terrain: 3, climate: 1, owner: 0, capitalOf: 0, rulingCity: [-1, -1], resource: -1, improvement: -1, improvementLevel: 0, city: null, visibility: [1], ...p };
+}
 import { type FakeTile, makeSave } from './saveWriter';
 
 describe('LZ4', () => {
@@ -110,5 +115,106 @@ describe('save file', () => {
     const junk = new Uint8Array(400).fill(0x41);
     junk[0] = 0x40;
     expect(() => parseStateFile(junk)).toThrow();
+  });
+});
+
+describe('LZ4 back-references', () => {
+  const sample = () => {
+    // Repetitive with some noise: long runs, short repeats and literal stretches.
+    const out: number[] = [];
+    for (let i = 0; i < 3000; i++) out.push(...[1, 2, 3, 4, 5]);
+    for (let i = 0; i < 700; i++) out.push((i * 131) & 255);
+    for (let i = 0; i < 400; i++) out.push(9);
+    return new Uint8Array(out);
+  };
+
+  it('round-trips compressed data with long matches', () => {
+    const data = sample();
+    const block = lz4CompressBlock(data);
+    expect(block.length).toBeLessThan(data.length / 4);
+    expect([...lz4DecompressBlock(block, data.length)]).toEqual([...data]);
+  });
+
+  it('reads both container sizes', () => {
+    const data = sample();
+    expect([...decompressState(compressState(data, 2))]).toEqual([...data]);
+    expect([...decompressState(compressState(data, 4))]).toEqual([...data]);
+  });
+
+  it('reads stored (uncompressed) and 1-byte-size containers', () => {
+    const data = new Uint8Array(40).map((_, i) => i);
+    expect([...decompressState(new Uint8Array([0x00, ...data]))]).toEqual([...data]);
+    // 40 noisy bytes then a short run: compresses by well under 256 bytes.
+    const small = new Uint8Array([...Array.from({ length: 40 }, (_, i) => (i * 97) & 255), ...Array(100).fill(7)]);
+    const block = lz4CompressBlock(small);
+    expect(small.length - block.length).toBeLessThan(256);
+    expect([...decompressState(new Uint8Array([0x40, small.length - block.length, ...block]))]).toEqual([...small]);
+  });
+
+  it('handles lengths on the 15 and 255 boundaries', () => {
+    for (const n of [14, 15, 16, 15 + 254, 15 + 255, 15 + 256, 15 + 510]) {
+      // n literals, then a match of n + 4 bytes copying the start.
+      const lit = Array.from({ length: n }, (_, i) => (i * 37 + 1) & 255);
+      const data = new Uint8Array([...lit, ...lit, 0, 0, 0, 0].slice(0, 2 * n + 4));
+      for (let i = n; i < data.length; i++) data[i] = data[i - n];
+      expect([...lz4DecompressBlock(lz4CompressBlock(data), data.length)], `n=${n}`).toEqual([...data]);
+    }
+  });
+
+  it('rejects offsets of 0 or before the start', () => {
+    expect(() => lz4DecompressBlock(new Uint8Array([0x10, 65, 0, 0, 0x00]), 64)).toThrow(/bad offset/);
+    expect(() => lz4DecompressBlock(new Uint8Array([0x10, 65, 2, 0, 0x00]), 64)).toThrow(/bad offset/);
+  });
+
+  it('rejects output larger than promised', () => {
+    const data = sample();
+    expect(() => lz4DecompressBlock(lz4CompressBlock(data), data.length - 1)).toThrow(/overflow/);
+  });
+
+  it('the literal-only writer still works', () => {
+    const data = sample();
+    expect([...decompressState(compressStateLiteral(data))]).toEqual([...data]);
+  });
+});
+
+describe('id tables', () => {
+  const raw = (over: Partial<RawTile>[], tribe = 4, techs = [6, 20], numCities = 1): RawSave => ({
+    header: { version: 124, currentTurn: 1, mapName: 'x', width: over.length + 1, height: 1 },
+    players: [{ id: 1, name: 'me', autoPlay: false, tribe, stars: 0, score: 0, numCities, techs }],
+    warnings: [],
+    tiles: [
+      [
+        fogTile(0, 0, { improvement: 1, owner: 1, rulingCity: [0, 0], city: { level: 1, population: 0, production: 0, borderSize: 1, name: 'Home' } }),
+        ...over.map((p, i) => fogTile(i + 1, 0, { owner: 1, rulingCity: [0, 0], ...p })),
+      ],
+    ],
+  });
+
+  it('maps every terrain id', () => {
+    const ids = { 1: 'water', 2: 'ocean', 3: 'field', 4: 'mountain', 5: 'forest', 6: 'ice', 7: 'wetland', 8: 'wetland', 99: 'unknown' };
+    const s = toGameState(raw(Object.keys(ids).map((k) => ({ terrain: Number(k) }))), 1).state;
+    expect(s.tiles.slice(1).map((t) => t.terrain)).toEqual(Object.values(ids));
+  });
+
+  it('maps every resource id (unknown ids are hidden)', () => {
+    const ids = { 1: 'game', 2: 'crop', 3: 'fish', 5: 'metal', 6: 'fruit', 7: 'none', 9: 'aquacrop', 42: 'none' };
+    const s = toGameState(raw(Object.keys(ids).map((k) => ({ resource: Number(k) })), 3), 1).state;
+    expect(s.tiles.slice(1).map((t) => t.resource)).toEqual(Object.values(ids));
+  });
+
+  it('maps every improvement id', () => {
+    const ids = { 3: 'none', 5: 'farm', 6: 'windmill', 12: 'lumberhut', 13: 'sawmill', 21: 'mine', 22: 'forge', 49: 'aquafarm', 50: 'market', 17: 'other' };
+    const s = toGameState(raw(Object.keys(ids).map((k) => ({ improvement: Number(k) }))), 1).state;
+    expect(s.tiles.slice(1).map((t) => t.improvement)).toEqual(Object.values(ids));
+  });
+
+  it('maps tribe tech ids to their slot', () => {
+    expect(techsFromIdx([28, 27, 39]).sort()).toEqual(['hunting', 'ramming', 'riding']);
+    expect(techsFromIdx([42, 41, 50]).sort()).toEqual(['philosophy', 'ramming', 'sailing']);
+    expect(techsFromIdx([9999])).toEqual([]);
+  });
+
+  it('prices techs by all your cities, not just the ones in view', () => {
+    expect(toGameState(raw([{}], 4, [], 3), 1).state.settings.cityCount).toBe(3);
   });
 });

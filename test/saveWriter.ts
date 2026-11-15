@@ -1,6 +1,6 @@
 // Writes a synthetic .state file in the layout the reader expects (game version 124),
 // so the parser can be tested in CI without a real (private) save.
-import { compressStateLiteral } from '../src/parse/lz4';
+import { compressState } from './lz4Writer';
 
 export interface FakeTile {
   terrain: number; // 3 field, 4 mountain, 5 forest, 1 water
@@ -131,7 +131,9 @@ export function makeSave(opts: { version?: number; turn?: number; tiles: FakeTil
   const w = new W();
   w.u32(version);
   block(w, version, 0, size, opts.tiles, opts.players);
-  w.zeros(3); // separator
+  // Real saves have about 11 bytes here, the last few non-zero.
+  w.zeros(7);
+  for (const b of [0x12, 0x34, 0x56, 0x78]) w.u8(b);
   block(w, version, opts.turn ?? 7, size, opts.tiles, opts.players);
-  return compressStateLiteral(new Uint8Array(w.b));
+  return compressState(new Uint8Array(w.b));
 }
