@@ -305,18 +305,47 @@ class Search {
     for (let pass = 0; pass < 10; pass++) {
       let any = false;
       for (const s of this.changed()) {
-        const undo = this.tryMove([[s, this.c.keepIdx[s]]]);
-        if (!undo) continue;
-        const i2 = this.income();
-        const c2 = this.cost();
-        this.record(i2, c2);
-        if (i2 >= inc && c2 <= cost) {
-          inc = i2;
-          cost = c2;
-          any = true;
-        } else undo();
+        // Back to how the tile is now, or (for a tile with a building) just emptied.
+        const alts = [this.c.keepIdx[s]];
+        const blank = this.c.opts[s].findIndex((o, k) => o.build === null && k !== this.choice[s]);
+        if (blank >= 0 && blank !== alts[0] && this.c.opts[s][this.choice[s]].build !== null) alts.push(blank);
+        for (const k of alts) {
+          const undo = this.tryMove([[s, k]]);
+          if (!undo) continue;
+          const i2 = this.income();
+          const c2 = this.cost();
+          this.record(i2, c2);
+          if (i2 >= inc && c2 <= cost) {
+            inc = i2;
+            cost = c2;
+            any = true;
+            break;
+          } else undo();
+        }
       }
       if (!any) break;
+    }
+  }
+
+  /**
+   * A market needs a producer next to it, and a producer its support building, or the game
+   * won't let you build it. Pruning keeps such a building when it pays (a refund bigger
+   * than its price), so remove those here.
+   */
+  dropUnbuildable() {
+    const { c } = this;
+    for (let guard = 0; guard < c.tiles.length; guard++) {
+      let fixed = false;
+      for (const s of this.changed()) {
+        const o = c.opts[s][this.choice[s]];
+        const b = o.build;
+        const need = b === 'market' ? (PRODUCERS as readonly BuildingKind[]) : isProducer(b) ? PRODUCER_SUPPORT[b] : null;
+        if (!need || c.nb[c.tiles[s]].some((n) => need.includes(this.layout[n] as BuildingKind))) continue;
+        const blank = c.opts[s].findIndex((x) => x.build === null);
+        const k = blank >= 0 ? blank : c.keepIdx[s];
+        if (this.tryMove([[s, k]])) fixed = true;
+      }
+      if (!fixed) break;
     }
   }
 
@@ -518,6 +547,7 @@ export function search(state: GameState, opts: SearchOptions): Frontier {
   for (const [, e] of archive.archive) {
     const s = new Search(c, e.choice);
     s.prune();
+    s.dropUnbuildable();
     const inc = s.income();
     const cost = s.cost();
     const cur = finals.get(inc);

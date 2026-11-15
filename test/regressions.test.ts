@@ -1,9 +1,11 @@
 // Cases found in review, each pinned to the right answer (checked against brute force).
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import type { GameState } from '../src/model/types';
 import { evaluateGoal } from '../src/solver/goals';
 import { income } from '../src/solver/income';
 import { search } from '../src/solver/search';
-import { runOptimizer } from '../src/solver';
+import { objectivesFor, runOptimizer } from '../src/solver';
 import { orderActions, simulate } from '../src/solver/schedule';
 import { bruteFrontier } from './brute';
 import { makeState, withBuildings } from './helpers';
@@ -53,6 +55,7 @@ describe('solver regressions', () => {
     const s = makeState(`f.f.f\n.,f,.\nffCff\nfM.f,\nf.ff.`, { owned: ['hunting', 'climbing', 'organization', 'riding'], allowDestroy: true, allowGrow: true });
     for (const p of S(s).plans) {
       for (const ch of p.changes) {
+        // (Tiles that had a building are covered by the round 3 case below.)
         if (!ch.option.build || ch.option.cost <= 0 || s.tiles[ch.tile].improvement !== 'none') continue;
         const layout = [...p.layout];
         layout[ch.tile] = null;
@@ -144,4 +147,32 @@ describe('round 2 solver findings', () => {
     // Within 2% of trying every plan (it tries a handful and their neighbours).
     expect(o.result!.bankAtDeadline!).toBeGreaterThanOrEqual(best * 0.98);
   }, 60000);
+});
+
+describe('round 3 solver findings', () => {
+  const load = (name: string) => JSON.parse(readFileSync(new URL(`./cases/${name}`, import.meta.url), 'utf8'));
+
+  it('no plan keeps a useless replacement on a tile that had a building', () => {
+    const s = load('r3-windmill.json') as GameState;
+    for (let target = 1; target <= 10; target++) {
+      const f = search(s, { objectives: objectivesFor({ kind: 'income', income: target, turns: 0 }) });
+      for (const p of f.plans) expect(orderActions(s, p).skipped, `target ${target} plan ${p.income}:${p.cost}`).toEqual([]);
+    }
+  }, 60000);
+
+  it('a refund bigger than the build price does not put unbuildable markets in plans', () => {
+    const s = makeState('fff\nfCf\nfff', { owned: ['riding', 'roads', 'trade', 'hunting', 'forestry'] });
+    s.settings.costs = { ...s.settings.costs, market: 0, clearForestRefund: 2 };
+    for (const p of search(s, { objectives: objectivesFor({ kind: 'max' }) }).plans) expect(orderActions(s, p).skipped, `plan ${p.income}:${p.cost}`).toEqual([]);
+  });
+
+  it('a bank goal tries every plan when the frontier is small', () => {
+    const { state, goal } = load('r3-bank.json');
+    expect(runOptimizer(state, goal).result!.bankAtDeadline).toBe(97); // plan 8 of 13; a local walk stopped at 57
+  });
+
+  it('an income goal looks past the cheapest few plans', () => {
+    const { state, goal } = load('r3-income.json');
+    expect(runOptimizer(state, goal).result!.reachedTurn).toBe(12);
+  });
 });

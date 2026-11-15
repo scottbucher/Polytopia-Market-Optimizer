@@ -79,7 +79,7 @@ export function evaluateGoal(state: GameState, frontier: Frontier, goal: Goal): 
       return { ...r, bundles: [], schedule: simulate(state, [], goal.turns), met: true, reachedTurn: 0, summary: `Your markets already make ${now}★ per turn, which meets ${target}★. Nothing to build.` };
     }
     // The cheapest few plans that reach the target (frontier cost rises with income).
-    const cands = plans.filter((p) => p.income >= target).slice(0, 4);
+    const cands = plans.filter((p) => p.income >= target).slice(0, 16);
     let best: GoalResult | null = null;
     for (const plan of cands) {
       const { bundles: all, skipped } = orderActions(state, plan);
@@ -137,7 +137,7 @@ export function evaluateGoal(state: GameState, frontier: Frontier, goal: Goal): 
     }
   };
   // A few plans spread over the frontier, then the neighbours of the best one until nothing improves.
-  for (const i of spreadIdx(plans.length, 6)) tryPlan(i);
+  for (const i of spreadIdx(plans.length, plans.length <= 40 ? plans.length : 12)) tryPlan(i);
   for (let guard = 0; guard < plans.length; guard++) {
     const at = bestIdx;
     for (const d of [-2, -1, 1, 2]) if (at + d >= 0 && at + d < plans.length) tryPlan(at + d);
