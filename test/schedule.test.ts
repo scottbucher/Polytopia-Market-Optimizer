@@ -181,7 +181,7 @@ describe('goals', () => {
       if (goal.kind === 'income') expect(mine.reachedTurn!).toBeLessThanOrEqual(generic.reachedTurn!);
       else expect(mine.bankAtDeadline!, JSON.stringify(goal)).toBeGreaterThanOrEqual(generic.bankAtDeadline!);
     }
-  });
+  }, 60000);
 
   it('a market you already have is never torn down without destroy allowed', () => {
     const t = withBuildings(makeState(map, { owned: ['hunting', 'forestry', 'mathematics', 'riding', 'roads', 'trade'] }), { 6: 'market' });

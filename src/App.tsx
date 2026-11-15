@@ -74,8 +74,10 @@ export default function App() {
     setTileOpacity(1);
   };
 
-  const paint = (i: number) => {
-    if (tool.kind === 'look') return;
+  const paint = (i: number, first: boolean) => {
+    if (tool.kind === 'look' || i < 0 || i >= state.tiles.length) return;
+    // Cities and resources toggle, so dragging would flip them on every tile it passes.
+    if (!first && (tool.kind === 'city' || tool.kind === 'resource')) return;
     update((st) => applyTool(st, tool, i));
   };
 
@@ -294,11 +296,12 @@ export default function App() {
           </div>
           <div className="mapwrap">
             <MapView
+              key={`${state.width}x${state.height}`}
               state={state}
               view={view}
               overlay={overlay}
               highlight={hoverTile}
-              onPaint={paint}
+              onPaint={tool.kind === 'look' ? undefined : paint}
               onHover={setHover}
               backdrop={backdrop}
               tileOpacity={tileOpacity}
@@ -372,15 +375,15 @@ export default function App() {
               </label>
               <label>
                 Cities you own
-                <NumberField min={1} value={s.cityCount} onChange={(v) => setSettings({ cityCount: v })} />
+                <NumberField min={1} max={999} value={s.cityCount} onChange={(v) => setSettings({ cityCount: v })} />
               </label>
               <label>
                 Stars now
-                <NumberField min={0} value={s.stars} onChange={(v) => setSettings({ stars: v })} />
+                <NumberField min={0} max={9999} value={s.stars} onChange={(v) => setSettings({ stars: v })} />
               </label>
               <label title="The +★ per turn number shown in the game. The markets you already have are part of it.">
                 Income per turn
-                <NumberField min={curIncome} value={s.baseIncome + curIncome} onChange={(v) => setSettings({ baseIncome: Math.max(0, v - curIncome) })} />
+                <NumberField min={curIncome} max={9999} value={s.baseIncome + curIncome} onChange={(v) => setSettings({ baseIncome: Math.max(0, v - curIncome) })} />
                 <small className="muted">{curIncome > 0 ? `incl. ${curIncome}★ from markets` : 'from everything you have'}</small>
               </label>
             </div>
@@ -440,7 +443,7 @@ export default function App() {
               <Toggle label="grow forest" checked={s.allowGrow} onChange={(v) => setSettings({ allowGrow: v })} />
               <Toggle label="destroy buildings" checked={s.allowDestroy} onChange={(v) => setSettings({ allowDestroy: v })} />
             </fieldset>
-            <button type="button" className="primary" onClick={() => opt.solve(state, goal, stateKey)} disabled={busy || unsupported || state.cities.length === 0}>
+            <button type="button" className="primary" onClick={() => !busy && opt.solve(state, goal, stateKey)} aria-disabled={busy || undefined} disabled={unsupported || state.cities.length === 0}>
               {busy ? 'Working…' : opt.solved ? 'Solve again' : 'Find the best layout'}
             </button>
             {state.cities.length === 0 && <p className="small muted">Add at least one city to the map first.</p>}
@@ -461,7 +464,7 @@ export default function App() {
                 onHoverTile={setStepHover}
                 ms={opt.solved.ms}
                 stale={stale}
-                loading={opt.busy === 'plan'}
+                loading={opt.busy !== null}
               />
             </section>
           )}
@@ -481,6 +484,7 @@ export default function App() {
 
 function describeTile(state: GameState, i: number) {
   const t = state.tiles[i];
+  if (!t) return null;
   const parts = [where(state, i), t.terrain === 'unknown' ? 'unexplored' : t.terrain];
   if (t.resource !== 'none') parts.push(t.resource);
   if (t.improvement !== 'none') parts.push(t.improvement === 'other' ? 'other building' : t.improvement);
@@ -527,7 +531,11 @@ function NewMap({ onCreate, onExample }: { onCreate: (w: number, h: number) => v
   const close = () => ref.current?.removeAttribute('open');
   // Close on Escape or a click outside.
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && close();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || !ref.current?.open) return;
+      close();
+      ref.current.querySelector('summary')?.focus();
+    };
     const onClick = (e: MouseEvent) => ref.current && !ref.current.contains(e.target as Node) && close();
     document.addEventListener('keydown', onKey);
     document.addEventListener('mousedown', onClick);
@@ -595,7 +603,7 @@ function RulesEditor({ costs, onChange }: { costs: CostTable; onChange: (c: Cost
         {COST_LABELS.map(([k, label, o]) => (
           <label key={k}>
             {label}
-            <NumberField min={0} max={k === 'literacyFactor' ? 1 : 999} step={o?.integer === false ? 0.01 : 1} integer={o?.integer !== false} value={costs[k]} onChange={(v) => onChange({ ...costs, [k]: v })} />
+            <NumberField min={0} max={k === 'literacyFactor' ? 1 : 999} step={o?.integer === false ? 0.01 : 1} integer={o?.integer !== false} value={Math.round(costs[k] * 1000) / 1000} onChange={(v) => onChange({ ...costs, [k]: v })} />
           </label>
         ))}
       </div>

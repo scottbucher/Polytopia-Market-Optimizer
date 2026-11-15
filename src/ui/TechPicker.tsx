@@ -26,8 +26,9 @@ export function TechPicker({ owned, tribe, prices, onChange }: { owned: TechKey[
     else for (const a of [t, ...ancestors(t)]) next.add(a);
     onChange([...next]);
   };
-  const Btn = ({ t }: { t: TechKey }) => (
-    <button type="button" className={`tech${has.has(t) ? ' on' : ''}`} onClick={() => toggle(t)} aria-pressed={has.has(t)} title={has.has(t) ? 'Owned' : `Costs ${prices(t)}★ now`}>
+  // A plain function, not a component: a component defined here would remount (and lose focus) on every render.
+  const btn = (t: TechKey) => (
+    <button key={t} type="button" className={`tech${has.has(t) ? ' on' : ''}`} onClick={() => toggle(t)} aria-pressed={has.has(t)} title={has.has(t) ? 'Owned' : `Costs ${prices(t)}★ now`}>
       <span>{techName(t, tribe)}</span>
       {!has.has(t) && <small>{prices(t)}★</small>}
     </button>
@@ -36,14 +37,12 @@ export function TechPicker({ owned, tribe, prices, onChange }: { owned: TechKey[
     <div className="techtree">
       {TECH_ROOTS.map((r) => (
         <div className="branch" key={r}>
-          <Btn t={r} />
+          {btn(r)}
           <div className="kids">
             {children(r).map((c) => (
               <div className="pair" key={c}>
-                <Btn t={c} />
-                {children(c).map((g) => (
-                  <Btn t={g} key={g} />
-                ))}
+                {btn(c)}
+                {children(c).map((g) => btn(g))}
               </div>
             ))}
           </div>

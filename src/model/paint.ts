@@ -37,6 +37,7 @@ export function applyTool(st: GameState, tool: Tool, i: number): GameState {
       return st;
     }
     case 'resource': {
+      if (t.improvement === 'city') return st;
       const ok = RESOURCE_TERRAIN[tool.v];
       if (ok && !ok.includes(t.terrain)) t.terrain = ok[0];
       t.resource = t.resource === tool.v ? 'none' : tool.v;

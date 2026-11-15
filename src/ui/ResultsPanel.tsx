@@ -146,7 +146,7 @@ export function ResultsPanel({ state, result, frontier, currentIncome, selected,
               {frontier.map((p, i) => (
                 <tr key={i} className={`${i === selected ? 'sel' : ''}${stale || loading ? ' off' : ''}`} onClick={() => !stale && !loading && onSelect(i)}>
                   <td>
-                    <button type="button" className="pickbtn" aria-pressed={i === selected} disabled={stale || loading} aria-label={`Show the ${p.income}★ plan`}>
+                    <button type="button" className="pickbtn" aria-pressed={i === selected} disabled={stale} aria-disabled={loading || undefined} aria-label={`Show the ${p.income}★ plan`}>
                       {p.income}★
                     </button>
                   </td>

@@ -123,7 +123,8 @@ button,
   font-weight: 600;
   white-space: nowrap;
 }
-button:disabled {
+button:disabled,
+button[aria-disabled='true'] {
   opacity: 0.5;
   cursor: default;
 }
@@ -774,6 +775,7 @@ details.panel[open] > summary {
 .newmap .pop {
   position: absolute;
   right: 0;
+  max-width: calc(100vw - 32px);
   top: 40px;
   z-index: 5;
   background: var(--panel);
@@ -801,6 +803,10 @@ footer {
 }
 
 @media (max-width: 520px) {
+  .newmap .pop {
+    right: auto;
+    left: 0;
+  }
   .stats {
     grid-template-columns: 1fr;
   }
@@ -851,6 +857,9 @@ footer {
   stroke: var(--panel);
   stroke-width: 3px;
   stroke-linejoin: round;
+}
+.maplabels .stepnum text {
+  stroke: none;
 }
 .maplabels .inc {
   font-size: 10px;
