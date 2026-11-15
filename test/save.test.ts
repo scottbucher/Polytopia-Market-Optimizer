@@ -1,0 +1,24 @@
+import { existsSync, readFileSync } from 'fs';
+import { describe, expect, it } from 'vitest';
+import { parseStateFile } from '../src/parse/stateFile';
+import { humanPlayers, toGameState } from '../src/parse/toGameState';
+import { runOptimizer } from '../src/solver';
+
+// Put your own save at test/fixtures/game.state to run this (*.state is git-ignored).
+const FIXTURE = ['test/fixtures/game.state', 'test/fixtures/scott-singleplayer.state'].find((f) => existsSync(f));
+
+describe.skipIf(!FIXTURE)('real save file', () => {
+  it('parses, hides fog, and optimizes', () => {
+    const save = parseStateFile(new Uint8Array(readFileSync(FIXTURE!)));
+    const [me] = humanPlayers(save);
+    expect(me).toBeDefined();
+    const r = toGameState(save, me.id);
+    // every unexplored tile is blanked out
+    const unseen = save.tiles.flat().filter((t) => !t.visibility.includes(me.id)).length;
+    expect(r.hiddenTiles).toBe(unseen);
+    expect(r.state.tiles.filter((t) => t.terrain === 'unknown').length).toBeGreaterThanOrEqual(unseen);
+    const out = runOptimizer(r.state, { kind: 'max' });
+    expect(out.result).not.toBeNull();
+    expect(out.ms).toBeLessThan(10000);
+  });
+});
