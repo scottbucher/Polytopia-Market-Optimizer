@@ -10,6 +10,7 @@ describe('no spoilers', () => {
   const save = (techs: number[]): RawSave => ({
     header: { version: 124, currentTurn: 3, mapName: 'x', width: 3, height: 1 },
     players: [{ id: 1, name: 'me', autoPlay: false, tribe: 4, stars: 5, score: 0, numCities: 1, techs }],
+    warnings: [],
     tiles: [
       [
         tile(0, 0, { improvement: 1, owner: 1, rulingCity: [0, 0], visibility: [1], city: { level: 1, population: 0, production: 2, borderSize: 1, name: 'Home' } }),
@@ -24,7 +25,6 @@ describe('no spoilers', () => {
     expect(r.state.tiles[2].terrain).toBe('unknown');
     expect(r.state.tiles[2].resource).toBe('none');
     expect(r.state.tiles[1].resource).toBe('none'); // crop needs Organization
-    expect(r.hiddenResources).toBe(1);
   });
 
   it('shows crops once you have Organization', () => {

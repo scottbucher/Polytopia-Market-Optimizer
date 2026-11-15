@@ -16,12 +16,19 @@ interface Props {
   onSelect: (i: number) => void;
   onHoverTile: (t: number | null) => void;
   ms: number;
+  /** The map changed since this was solved: other plans can't be picked. */
+  stale: boolean;
+  /** A plan's build order is being worked out. */
+  loading: boolean;
 }
 
-export function ResultsPanel({ state, result, frontier, currentIncome, selected, onSelect, onHoverTile, ms }: Props) {
+export function ResultsPanel({ state, result, frontier, currentIncome, selected, onSelect, onHoverTile, ms, stale, loading }: Props) {
   const [done, setDone] = useState<Set<number>>(new Set());
   const steps = result.schedule.steps;
   const spend = steps.reduce((s, x) => s + x.action.cost, 0);
+  // Techs actually in this build order (a goal can stop before the whole plan).
+  const techSteps = steps.filter((x) => x.action.kind === 'tech');
+  const techCost = techSteps.reduce((s, x) => s + x.action.cost, 0);
   const finalIncome = result.schedule.finalIncome;
   const gain = finalIncome - currentIncome;
   const payback = gain > 0 ? Math.ceil(spend / gain) : null;
@@ -40,13 +47,25 @@ export function ResultsPanel({ state, result, frontier, currentIncome, selected,
       <p className={`summary${result.met ? '' : ' warn'}`}>{result.summary}</p>
       <div className="stats">
         <Stat label="Market income" value={`${currentIncome} → ${finalIncome}★`} sub={gain > 0 ? `+${gain} per turn` : 'no change'} />
-        <Stat label="Stars to spend" value={`${spend}★`} sub={result.plan.techs.length ? `${result.plan.techCost}★ of it on techs` : 'no new techs'} />
+        <Stat
+          label={spend < 0 ? 'Stars back' : 'Stars to spend'}
+          value={spend < 0 ? `+${-spend}★` : `${spend}★`}
+          sub={techSteps.length ? `${techCost}★ of it on techs` : 'no new techs'}
+        />
         <Stat label="Pays for itself" value={payback === null ? '—' : `${payback} turns`} sub={steps.length ? `last step on turn ${result.schedule.doneTurn}` : ''} />
       </div>
-      {result.plan.techs.length > 0 && (
+      {techSteps.length > 0 && (
         <p className="techs-line">
-          Techs to research: {result.plan.techs.map((t) => techName(t, state.settings.tribe)).join(', ')}
+          Techs to research: {techSteps.map((x) => (x.action.kind === 'tech' ? techName(x.action.tech, state.settings.tribe) : '')).join(', ')}
         </p>
+      )}
+      {result.skipped.length > 0 && (
+        <p className="small warn">
+          {result.skipped.length} step{result.skipped.length === 1 ? '' : 's'} of this plan could not be put in a valid order and {result.skipped.length === 1 ? 'is' : 'are'} left out.
+        </p>
+      )}
+      {result.schedule.unaffordable > 0 && (
+        <p className="small warn">The last {result.schedule.unaffordable === 1 ? 'step is' : `${result.schedule.unaffordable} steps are`} never affordable with this income, so the list stops early.</p>
       )}
 
       <h3>Build order</h3>
@@ -76,6 +95,9 @@ export function ResultsPanel({ state, result, frontier, currentIncome, selected,
                         <input
                           type="checkbox"
                           checked={isDone}
+                          aria-label={`Step ${n} done`}
+                          onFocus={() => onHoverTile(tile)}
+                          onBlur={() => onHoverTile(null)}
                           onChange={() => {
                             const s = new Set(done);
                             if (isDone) s.delete(n);
@@ -105,7 +127,9 @@ export function ResultsPanel({ state, result, frontier, currentIncome, selected,
       {frontier.length > 1 && (
         <>
           <h3>Other plans</h3>
-          <p className="muted small">The cheapest layout found for each income level. Pick one to see its build order.</p>
+          <p className="muted small">
+            {stale ? 'The map changed since this was solved. Solve again to pick from these.' : 'The cheapest layout found for each income level. Pick one to see its build order.'}
+          </p>
           <table className="frontier">
             <thead>
               <tr>
@@ -116,7 +140,14 @@ export function ResultsPanel({ state, result, frontier, currentIncome, selected,
             </thead>
             <tbody>
               {frontier.map((p, i) => (
-                <tr key={i} className={i === selected ? 'sel' : ''} onClick={() => onSelect(i)} tabIndex={0} onKeyDown={(e) => e.key === 'Enter' && onSelect(i)}>
+                <tr
+                  key={i}
+                  className={`${i === selected ? 'sel' : ''}${stale || loading ? ' off' : ''}`}
+                  aria-selected={i === selected}
+                  onClick={() => !stale && !loading && onSelect(i)}
+                  tabIndex={stale ? -1 : 0}
+                  onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && !stale && !loading && onSelect(i)}
+                >
                   <td>{p.income}★</td>
                   <td>{p.cost}★</td>
                   <td>{p.techs.map((t) => techName(t, state.settings.tribe)).join(', ') || '—'}</td>

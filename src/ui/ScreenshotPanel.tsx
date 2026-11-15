@@ -23,6 +23,7 @@ export function ScreenshotPanel({ state, view, backdrop, setBackdrop, tileOpacit
   const [msg, setMsg] = useState<string | null>(null);
 
   const load = (f: File) => {
+    if (backdrop) URL.revokeObjectURL(backdrop.href);
     const url = URL.createObjectURL(f);
     const img = new Image();
     img.onload = () => {
@@ -30,8 +31,9 @@ export function ScreenshotPanel({ state, view, backdrop, setBackdrop, tileOpacit
       const scale = b.w / img.naturalWidth;
       setBackdrop({ href: url, w: img.naturalWidth, h: img.naturalHeight, x: b.x, y: b.y, scale, opacity: 1 });
       setTileOpacity(0.45);
-      setMsg('Line the grid up with the screenshot, paint one or two tiles of each terrain, then press Guess.');
+      setMsg('Line the grid up with the screenshot, paint one or two tiles of each terrain, then press Guess terrain. Only tiles still marked Unexplored are guessed.');
     };
+    img.onerror = () => setMsg("That file couldn't be opened as an image.");
     img.src = url;
   };
 
@@ -90,16 +92,26 @@ export function ScreenshotPanel({ state, view, backdrop, setBackdrop, tileOpacit
       out.set(i, best);
     });
     onGuess(out);
-    setMsg(`Guessed ${out.size} tiles. Check them against the screenshot and fix any mistakes, then add crops, metal and buildings.`);
+    setMsg(out.size === 0 ? 'No unexplored tiles are under the screenshot, so there was nothing to guess.' : `Guessed ${out.size} tiles. Check them against the screenshot and fix any mistakes, then add crops, metal and buildings.`);
   };
 
   return (
     <div className="shot">
-      <input ref={fileRef} type="file" accept="image/*" hidden onChange={(e) => e.target.files?.[0] && load(e.target.files[0])} />
+      <input
+        ref={fileRef}
+        type="file"
+        accept="image/*"
+        hidden
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          e.target.value = '';
+          if (f) load(f);
+        }}
+      />
       {!backdrop ? (
         <>
           <p className="muted small">
-            Best effort: put a screenshot under the map, line up the grid, and the app guesses terrain from the colours. You still add crops, metal and buildings by hand.
+            Best effort: put a screenshot under the map, line up the grid, and the app guesses the terrain of tiles still marked Unexplored from the colours. You still add crops, metal and buildings by hand.
           </p>
           <button type="button" onClick={() => fileRef.current?.click()}>
             Choose screenshot
@@ -110,7 +122,7 @@ export function ScreenshotPanel({ state, view, backdrop, setBackdrop, tileOpacit
           <Slider label="Left / right" min={-2000} max={2000} value={backdrop.x} onChange={(x) => setBackdrop({ ...backdrop, x })} />
           <Slider label="Up / down" min={-2000} max={2000} value={backdrop.y} onChange={(y) => setBackdrop({ ...backdrop, y })} />
           <Slider label="Size" min={0.05} max={4} step={0.01} value={backdrop.scale} onChange={(scale) => setBackdrop({ ...backdrop, scale })} />
-          <Slider label="Map see-through" min={0} max={1} step={0.05} value={tileOpacity} onChange={setTileOpacity} />
+          <Slider label="Map opacity" min={0} max={1} step={0.05} value={tileOpacity} onChange={setTileOpacity} />
           <div className="row">
             <button type="button" onClick={guess}>
               Guess terrain
@@ -119,6 +131,7 @@ export function ScreenshotPanel({ state, view, backdrop, setBackdrop, tileOpacit
               type="button"
               className="secondary"
               onClick={() => {
+                URL.revokeObjectURL(backdrop.href);
                 setBackdrop(null);
                 setTileOpacity(1);
                 setMsg(null);

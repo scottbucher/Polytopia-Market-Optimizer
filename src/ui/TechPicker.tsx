@@ -1,6 +1,4 @@
-import { TECHS, TECH_BY_KEY, type TechKey, type TribeKey, techName } from '../data/rules';
-
-const ROOTS: TechKey[] = ['riding', 'organization', 'climbing', 'fishing', 'hunting'];
+import { TECH_BY_KEY, TECH_ROOTS, TECHS, type TechKey, type TribeKey, techName } from '../data/rules';
 
 function children(t: TechKey) {
   return TECHS.filter((x) => x.parent === t).map((x) => x.key);
@@ -36,7 +34,7 @@ export function TechPicker({ owned, tribe, prices, onChange }: { owned: TechKey[
   );
   return (
     <div className="techtree">
-      {ROOTS.map((r) => (
+      {TECH_ROOTS.map((r) => (
         <div className="branch" key={r}>
           <Btn t={r} />
           <div className="kids">

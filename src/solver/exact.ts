@@ -8,20 +8,27 @@
 //
 // What it does not search: a city's producers feeding a *neighbouring* city's market,
 // and support buildings in one city's territory feeding another city's producer.
-// `refine()` in refine.ts looks for those cross-border bonuses afterwards.
+// The global search in search.ts looks for those cross-border layouts afterwards.
 
 import {
+  BUILD_TECH,
   type BuildingKind,
+  isBuildingKind,
+  isProducer,
+  LIMITED,
+  MAX_LEVEL,
+  OP_TECH,
   PRODUCER_SUPPORT,
   PRODUCERS,
   type Producer,
   TECH_BY_KEY,
   type TechKey,
-  MAX_LEVEL,
 } from '../data/rules';
 import { type GameState, neighbors } from '../model/types';
 import { income as layoutIncome, type Layout } from './income';
-import { isOwned, techPrice, tileOptions, type TileOption } from './options';
+import { isOwned, makeTechBiller, missingChain, type TechBiller, tileOptions, type TileOption } from './options';
+
+export { isBuildingKind };
 
 export interface Change {
   tile: number;
@@ -36,12 +43,8 @@ export interface Plan {
   /** Stars spent on buildings, terrain actions and techs (clearing forest refunds count as negative). */
   cost: number;
   techCost: number;
-}
-
-const BUILDINGS: BuildingKind[] = ['market', 'sawmill', 'windmill', 'forge', 'lumberhut', 'farm', 'mine', 'aquafarm'];
-
-export function isBuildingKind(v: string): v is BuildingKind {
-  return (BUILDINGS as string[]).includes(v);
+  /** Price of each tech in `techs` when it is researched (Literacy discounts later techs). */
+  techPrices: Partial<Record<TechKey, number>>;
 }
 
 export function currentLayout(state: GameState): Layout {
@@ -71,49 +74,42 @@ interface CityConfig {
 
 type Curve = (CityConfig | null)[]; // index = income level
 
-/** Sets of techs worth trying to buy. Each set is closed under prerequisites. */
+/**
+ * Sets of techs worth trying to buy. Each set is closed under prerequisites.
+ *
+ * Market tech is always in. One toggle per tech that unlocks something on its own: producers, terrain
+ * actions, and support buildings whose tech is not already on the way to their
+ * producer's tech (Aquaculture for aquafarms). Literacy is decided later, when pricing.
+ */
 export function candidateTechSets(state: GameState): TechKey[][] {
   const s = state.settings;
-  const closure = (keys: TechKey[]) => {
-    const out = new Set<TechKey>();
-    for (const k of keys) {
-      let cur: TechKey | null = k;
-      while (cur && !isOwned(state, cur)) {
-        out.add(cur);
-        cur = TECH_BY_KEY[cur].parent;
-      }
-    }
-    return out;
-  };
   if (!s.allowNewTech) return [[]];
   const used = new Set<TechKey>();
+  const any = { ...state, settings: { ...s, allowNewTech: true } };
   state.tiles.forEach((t, i) => {
     if (t.city === null) return;
-    for (const o of tileOptions({ ...state, settings: { ...s, allowNewTech: true } }, i)) for (const k of o.techs) used.add(k);
+    for (const o of tileOptions(any, i)) for (const k of o.techs) used.add(k);
   });
-  const toggles: TechKey[][] = [];
-  const opt = (...k: TechKey[]) => {
-    const missing = k.filter((x) => used.has(x) && !isOwned(state, x));
-    if (missing.length) toggles.push(missing);
+  const chainOf = (t: TechKey) => {
+    const out = new Set<TechKey>();
+    for (let cur: TechKey | null = t; cur; cur = TECH_BY_KEY[cur].parent) out.add(cur);
+    return out;
   };
-  opt('mathematics');
-  opt('construction');
-  opt('smithery');
-  opt('forestry'); // clearing forest / huts without Mathematics
-  opt('spiritualism');
-  opt('chivalry');
-  opt('ramming');
-  const base: TechKey[] = isOwned(state, 'trade') ? [] : ['trade'];
+  const leaders = new Set<TechKey>([...PRODUCERS.map((p) => BUILD_TECH[p]), ...Object.values(OP_TECH)]);
+  for (const p of PRODUCERS) {
+    const chain = chainOf(BUILD_TECH[p]);
+    for (const sup of PRODUCER_SUPPORT[p]) if (!chain.has(BUILD_TECH[sup])) leaders.add(BUILD_TECH[sup]);
+  }
+  const toggles = [...leaders].filter((t) => used.has(t) && !isOwned(state, t)).sort();
   const seen = new Map<string, TechKey[]>();
-  seen.set('', []);
-  const n = toggles.length;
-  for (let mask = 0; mask < 1 << n; mask++) {
-    const keys = [...base];
+  for (let mask = 0; mask < 1 << toggles.length; mask++) {
+    // Every plan needs markets.
+    const set = new Set<TechKey>(missingChain(state, BUILD_TECH.market));
     toggles.forEach((t, b) => {
-      if (mask & (1 << b)) keys.push(...t);
+      if (mask & (1 << b)) for (const k of missingChain(state, t)) set.add(k);
     });
-    const set = [...closure(keys)].sort();
-    seen.set(set.join(','), set);
+    const list = [...set].sort();
+    seen.set(list.join(','), list);
   }
   return [...seen.values()];
 }
@@ -149,89 +145,93 @@ function cityCurve(state: GameState, infos: TileInfo[]): Curve {
   const canDestroy = infos.some((i) => i.destroy);
   const existingOf = (k: BuildingKind) => infos.filter((i) => i.existing === k).map((i) => i.tile);
   const exMarket = existingOf('market');
-  const exProd: Record<Producer, number[]> = {
-    sawmill: existingOf('sawmill'),
-    windmill: existingOf('windmill'),
-    forge: existingOf('forge'),
-  };
+  const exProd = Object.fromEntries(PRODUCERS.map((p) => [p, existingOf(p)])) as Record<Producer, number[]>;
 
-  const marketTiles: (number | null)[] =
+  const marketTiles: number[] =
     exMarket.length && !canDestroy ? [exMarket[0]] : infos.filter((i) => i.roles.has('market')).map((i) => i.tile);
 
   for (const m of marketTiles) {
-    if (m === null) continue;
     const mInfo = byTile.get(m)!;
     const nbM = neighbors(width, height, m);
+    // Where each producer can go: nowhere, or next to the market (or where it already is
+    // when it can't be destroyed).
     const choices: (number | null)[][] = PRODUCERS.map((p) => {
       if (exProd[p].length && !canDestroy) return [exProd[p][0]];
       const c: (number | null)[] = [null];
       for (const n of nbM) if (byTile.get(n)?.roles.has(p)) c.push(n);
       return c;
     });
-
-    for (const ps of choices[0]) {
-      for (const pw of choices[1]) {
-        if (pw !== null && pw === ps) continue;
-        for (const pf of choices[2]) {
-          if (pf !== null && (pf === ps || pf === pw)) continue;
-          const prodTiles: (number | null)[] = [ps, pw, pf];
-          if (prodTiles.includes(m)) continue;
-          evalConfig(m, mInfo, prodTiles);
-        }
+    const pick: (number | null)[] = [];
+    const walk = (k: number) => {
+      if (k === PRODUCERS.length) {
+        evalConfig(m, mInfo, nbM, pick);
+        return;
       }
-    }
+      for (const t of choices[k]) {
+        if (t !== null && (t === m || pick.slice(0, k).includes(t))) continue;
+        pick[k] = t;
+        walk(k + 1);
+      }
+    };
+    walk(0);
   }
   return curve;
 
-  function evalConfig(m: number, mInfo: TileInfo, prodTiles: (number | null)[]) {
+  function evalConfig(m: number, mInfo: TileInfo, nbM: number[], prodTiles: (number | null)[]) {
     const assign = new Map<number, BuildingKind | null>();
     let base = mInfo.roles.get('market')!.cost;
     assign.set(m, 'market');
     const used = new Set<number>([m]);
-    const active: { tile: number; p: Producer }[] = [];
-    for (let k = 0; k < 3; k++) {
+    let active: { tile: number; p: Producer }[] = [];
+    PRODUCERS.forEach((p, k) => {
       const t = prodTiles[k];
-      if (t === null) continue;
-      const p = PRODUCERS[k];
-      const r = byTile.get(t)!.roles.get(p);
-      if (!r) return;
+      if (t === null) return;
+      const r = byTile.get(t)!.roles.get(p)!;
       base += r.cost;
       assign.set(t, p);
       used.add(t);
-      if (neighbors(width, height, m).includes(t)) active.push({ tile: t, p });
-    }
+      if (nbM.includes(t)) active.push({ tile: t, p });
+    });
     if (!active.length) return;
-    // Existing limited buildings that are displaced must be destroyed.
-    const displaced = [...infos.filter((i) => (i.existing === 'market' || (PRODUCERS as readonly string[]).includes(i.existing ?? '')) && !used.has(i.tile))];
-    for (const d of displaced) {
-      if (d.existing === 'market' || prodTiles[PRODUCERS.indexOf(d.existing as Producer)] !== null) {
-        if (!d.destroy) return;
-        base += d.destroy.cost;
-        assign.set(d.tile, null);
-        used.add(d.tile);
-      }
+    // Existing one-per-city buildings that are replaced must be destroyed first. Their
+    // tiles can still take a support building afterwards.
+    const displacedCost = new Map<number, number>();
+    for (const d of infos) {
+      if (!d.existing || used.has(d.tile) || !LIMITED.includes(d.existing)) continue;
+      const replaced = d.existing === 'market' || (isProducer(d.existing) && prodTiles[PRODUCERS.indexOf(d.existing)] !== null);
+      if (!replaced) continue;
+      if (!d.destroy) return;
+      base += d.destroy.cost;
+      assign.set(d.tile, null);
+      displacedCost.set(d.tile, d.destroy.cost);
     }
 
     // Support slots: tile -> cheapest way to support one of the active producers.
     interface Slot { tile: number; cost: number; kind: BuildingKind; prod: number }
-    const best = new Map<number, Slot>();
-    const perProd: Slot[][] = active.map(() => []);
-    active.forEach((a, ai) => {
+    const slotsFor = (a: { tile: number; p: Producer }, ai: number) => {
+      const out: Slot[] = [];
       for (const s of neighbors(width, height, a.tile)) {
         if (used.has(s)) continue;
         const info = byTile.get(s);
         if (!info) continue;
         for (const kind of PRODUCER_SUPPORT[a.p]) {
           const r = info.roles.get(kind);
-          if (!r) continue;
-          const slot = { tile: s, cost: r.cost, kind, prod: ai };
-          perProd[ai].push(slot);
-          const cur = best.get(s);
-          if (!cur || slot.cost < cur.cost) best.set(s, slot);
+          // A displaced tile's support option already includes the destroy we paid for above.
+          if (r) out.push({ tile: s, cost: r.cost - (displacedCost.get(s) ?? 0), kind, prod: ai });
         }
       }
-    });
-    if (perProd.some((l) => !l.length)) return;
+      return out;
+    };
+    // A producer with no possible support adds nothing: it just stays at level 0.
+    active = active.filter((a, ai) => slotsFor(a, ai).length > 0);
+    if (!active.length) return;
+    const perProd = active.map(slotsFor);
+    const best = new Map<number, Slot>();
+    for (const l of perProd)
+      for (const slot of l) {
+        const cur = best.get(slot.tile);
+        if (!cur || slot.cost < cur.cost) best.set(slot.tile, slot);
+      }
 
     // Each active producer needs one support: take the cheapest for each (on distinct tiles).
     const chosen: Slot[] = [];
@@ -288,10 +288,10 @@ export function cityPlans(state: GameState): Plan[] {
   const cache = new Map<string, Curve>();
 
   const out: Plan[] = [];
+  const bill = makeTechBiller(state);
 
   for (const set of candidateTechSets(state)) {
     const allowed = new Set(set);
-    const techCost = set.reduce((s, k) => s + techPrice(state, k), 0);
     const curves = cities.map((c) => {
       const infos = tileInfos(state, cityTiles.get(c)!, allowed);
       const key = c + '|' + infos.map((i) => [...i.roles.entries()].map(([k, v]) => k + v.cost).join(',') + (i.destroy ? 'd' : '')).join(';');
@@ -318,13 +318,13 @@ export function cityPlans(state: GameState): Plan[] {
       dp = next;
     }
     dp.forEach((d, inc) => {
-      if (d && inc > 0) out.push(toPlan(state, d.picks, set));
+      if (d && inc > 0) out.push(toPlan(state, d.picks, set, bill));
     });
   }
   return out;
 }
 
-export function toPlan(state: GameState, picks: (CityConfig | null)[], techSet: TechKey[]): Plan {
+export function toPlan(state: GameState, picks: (CityConfig | null)[], techSet: TechKey[], bill = makeTechBiller(state)): Plan {
   const ok = (o: TileOption) => o.techs.every((k) => isOwned(state, k) || techSet.includes(k));
   const layout = currentLayout(state);
   const changes: Change[] = [];
@@ -344,21 +344,19 @@ export function toPlan(state: GameState, picks: (CityConfig | null)[], techSet: 
       if (!o.keep) changes.push({ tile, option: o });
     }
   }
-  return finishPlan(state, layout, changes);
+  return finishPlan(state, layout, changes, bill);
 }
 
-export function finishPlan(state: GameState, layout: Layout, changes: Change[]): Plan {
-  const needed = new Set<TechKey>();
-  for (const c of changes)
-    for (const t of c.option.techs) {
-      let cur: TechKey | null = t;
-      while (cur && !isOwned(state, cur)) {
-        needed.add(cur);
-        cur = TECH_BY_KEY[cur].parent;
-      }
-    }
-  const techs = [...needed].sort((a, b) => TECH_BY_KEY[a].tier - TECH_BY_KEY[b].tier);
-  const techCost = techs.reduce((s, t) => s + techPrice(state, t), 0);
-  const cost = changes.reduce((s, c) => s + c.option.cost, 0) + techCost;
-  return { changes, layout, techs, income: layoutIncome(layout, state.width, state.height).total, cost, techCost };
+export function finishPlan(state: GameState, layout: Layout, changes: Change[], bill: TechBiller = makeTechBiller(state)): Plan {
+  const b = bill(changes.flatMap((c) => c.option.techs));
+  const cost = changes.reduce((s, c) => s + c.option.cost, 0) + b.cost;
+  return {
+    changes,
+    layout,
+    techs: b.techs,
+    income: layoutIncome(layout, state.width, state.height).total,
+    cost,
+    techCost: b.cost,
+    techPrices: Object.fromEntries(b.price),
+  };
 }

@@ -1,4 +1,4 @@
-import { BUILDING_NAMES, techName } from '../data/rules';
+import { BUILDING_NAMES, isBuildingKind, OP_NAMES, techName } from '../data/rules';
 import type { GameState } from '../model/types';
 import type { Action } from '../solver/schedule';
 
@@ -14,8 +14,7 @@ export function describeAction(state: GameState, a: Action): { title: string; de
   if (a.kind === 'tech') return { title: `Research ${techName(a.tech, state.settings.tribe)}`, detail: '' };
   if (a.kind === 'op') {
     const t = state.tiles[a.tile];
-    const label =
-      a.op === 'clear' ? 'Clear forest' : a.op === 'burn' ? 'Burn forest' : a.op === 'grow' ? 'Grow forest' : `Destroy ${t.improvement !== 'none' && t.improvement !== 'other' && t.improvement !== 'city' ? BUILDING_NAMES[t.improvement] : 'building'}`;
+    const label = a.op === 'destroy' ? `Destroy ${isBuildingKind(t.improvement) ? BUILDING_NAMES[t.improvement] : 'building'}` : OP_NAMES[a.op];
     return { title: label, detail: where(state, a.tile) };
   }
   return { title: `Build ${BUILDING_NAMES[a.build]}`, detail: where(state, a.tile) };
@@ -23,5 +22,8 @@ export function describeAction(state: GameState, a: Action): { title: string; de
 
 export function starText(cost: number) {
   if (cost < 0) return `+${-cost}★`;
+  if (cost === 0) return 'free';
   return `${cost}★`;
 }
+
+export const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;

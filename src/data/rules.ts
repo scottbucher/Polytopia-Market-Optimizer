@@ -31,9 +31,6 @@ export const PRODUCER_SUPPORT: Record<Producer, BuildingKind[]> = {
   forge: ['mine'],
 };
 
-/** Buildings limited to one per city. */
-export const LIMITED: BuildingKind[] = ['market', 'sawmill', 'windmill', 'forge'];
-
 export const MAX_LEVEL = 8;
 
 export type TechKey =
@@ -99,10 +96,10 @@ export const TECH_IDX_ALIASES: Record<number, TechKey> = {
   46: 'sailing', // marinelife (Aquarion)
   40: 'fishing', // fishingsimple
   30: 'fishing', // frostwork (Polaris)
-  42: 'sailing', // icefishing (Polaris)
+  42: 'ramming', // icefishing (Polaris): parent of Polarism, so the Ramming slot
   31: 'navigation', // polarwarfare (Polaris)
   32: 'aquatism', // polarism (Polaris)
-  41: 'ramming', // sledding (Polaris)
+  41: 'sailing', // sledding (Polaris): parent of Polar Warfare, so the Sailing slot
   36: 'construction', // recycling (Cymanti)
   35: 'chivalry', // shock (Cymanti)
   49: 'meditation', // rituals (Cymanti)
@@ -221,49 +218,116 @@ export function techCost(tier: number, cities: number, costs: CostTable, hasLite
   return hasLiteracy ? Math.ceil(base * costs.literacyFactor - 1e-9) : base;
 }
 
+export type Op = 'destroy' | 'clear' | 'burn' | 'grow';
+
+/** Everything the optimizer needs to know about a building, in one place. */
+export interface BuildingDef {
+  kind: BuildingKind;
+  name: string;
+  /** Short label drawn on the map. */
+  abbr: string;
+  /** Tech (by slot) needed to build it. */
+  tech: TechKey;
+  /** Terrains it can stand on. Terrain actions (clear, burn, grow) can get a tile there. */
+  terrain: Terrain[];
+  /** Resource the tile must have. */
+  resource?: Resource;
+  /** One per city. */
+  limited: boolean;
+  /** Only some tribes have it. */
+  tribeFlag?: 'hasMarket' | 'hasAquafarm';
+}
+
+export const BUILDINGS: BuildingDef[] = [
+  { kind: 'market', name: 'Market', abbr: 'Mk', tech: 'trade', terrain: ['field'], limited: true, tribeFlag: 'hasMarket' },
+  { kind: 'sawmill', name: 'Sawmill', abbr: 'Sw', tech: 'mathematics', terrain: ['field'], limited: true },
+  { kind: 'windmill', name: 'Windmill', abbr: 'Wm', tech: 'construction', terrain: ['field'], limited: true },
+  { kind: 'forge', name: 'Forge', abbr: 'Fg', tech: 'smithery', terrain: ['field', 'forest'], limited: true },
+  { kind: 'lumberhut', name: 'Lumber Hut', abbr: 'Lh', tech: 'forestry', terrain: ['forest'], limited: false },
+  { kind: 'farm', name: 'Farm', abbr: 'Fa', tech: 'farming', terrain: ['field'], resource: 'crop', limited: false },
+  { kind: 'mine', name: 'Mine', abbr: 'Mi', tech: 'mining', terrain: ['mountain'], resource: 'metal', limited: false },
+  // Aquarion's Aquaculture sits in the Ramming slot.
+  { kind: 'aquafarm', name: 'Aquafarm', abbr: 'Aq', tech: 'ramming', terrain: ['water', 'ocean'], resource: 'aquacrop', limited: false, tribeFlag: 'hasAquafarm' },
+];
+
+export const BUILDING_KINDS: BuildingKind[] = BUILDINGS.map((b) => b.kind);
+export const BUILDING_BY_KIND = Object.fromEntries(BUILDINGS.map((b) => [b.kind, b])) as Record<BuildingKind, BuildingDef>;
+
+export function isBuildingKind(v: string | null | undefined): v is BuildingKind {
+  return !!v && v in BUILDING_BY_KIND;
+}
+
+export function isProducer(b: string | null | undefined): b is Producer {
+  return !!b && (PRODUCERS as readonly string[]).includes(b);
+}
+
 /** Tech needed to build each building (by slot). */
-export const BUILD_TECH: Record<BuildingKind, TechKey> = {
-  market: 'trade',
-  sawmill: 'mathematics',
-  windmill: 'construction',
-  forge: 'smithery',
-  lumberhut: 'forestry',
-  farm: 'farming',
-  mine: 'mining',
-  aquafarm: 'ramming', // Aquarion's Aquaculture sits in the Ramming slot
-};
+export const BUILD_TECH = Object.fromEntries(BUILDINGS.map((b) => [b.kind, b.tech])) as Record<BuildingKind, TechKey>;
+export const BUILDING_NAMES = Object.fromEntries(BUILDINGS.map((b) => [b.kind, b.name])) as Record<BuildingKind, string>;
+export const BUILDING_ABBR = Object.fromEntries(BUILDINGS.map((b) => [b.kind, b.abbr])) as Record<BuildingKind, string>;
+
+/** Buildings limited to one per city. */
+export const LIMITED: BuildingKind[] = BUILDINGS.filter((b) => b.limited).map((b) => b.kind);
+
+/** Terrain actions: what they need and what they turn the tile into. */
+export interface TerrainOpDef {
+  op: Exclude<Op, 'destroy'>;
+  from: Terrain;
+  to: Terrain;
+  /** Resource the tile has afterwards ('none' clears it). */
+  resource: Resource;
+  /** Tribe flag that must be true. */
+  tribeFlag?: 'canClearForest' | 'canBurnForest';
+  /** Setting that must be on. */
+  setting: 'allowClear' | 'allowBurn' | 'allowGrow';
+}
+
+export const TERRAIN_OPS: TerrainOpDef[] = [
+  { op: 'clear', from: 'forest', to: 'field', resource: 'none', tribeFlag: 'canClearForest', setting: 'allowClear' },
+  { op: 'burn', from: 'forest', to: 'field', resource: 'crop', tribeFlag: 'canBurnForest', setting: 'allowBurn' },
+  { op: 'grow', from: 'field', to: 'forest', resource: 'none', setting: 'allowGrow' },
+];
 
 export const OP_TECH = {
   clear: 'forestry',
   burn: 'construction',
   grow: 'spiritualism',
   destroy: 'chivalry',
-} as const satisfies Record<string, TechKey>;
+} as const satisfies Record<Op, TechKey>;
 
-/** Techs that reveal resources. Without them the player cannot see the resource. */
-export const REVEAL_TECH: Partial<Record<Resource, TechKey>> = {
-  crop: 'organization',
-  metal: 'climbing',
+export const OP_NAMES: Record<Op, string> = {
+  clear: 'Clear forest',
+  burn: 'Burn forest',
+  grow: 'Grow forest',
+  destroy: 'Destroy',
 };
 
-export const BUILDING_NAMES: Record<BuildingKind, string> = {
-  market: 'Market',
-  sawmill: 'Sawmill',
-  windmill: 'Windmill',
-  forge: 'Forge',
-  lumberhut: 'Lumber Hut',
-  farm: 'Farm',
-  mine: 'Mine',
-  aquafarm: 'Aquafarm',
+/** Star cost of a terrain action (clearing refunds stars, so it is negative). */
+export function opCost(op: Op, c: CostTable): number {
+  switch (op) {
+    case 'clear':
+      return -c.clearForestRefund;
+    case 'burn':
+      return c.burnForest;
+    case 'grow':
+      return c.growForest;
+    case 'destroy':
+      return c.destroy;
+  }
+}
+
+/** Philosophy grants Literacy, which makes every later tech cheaper. */
+export const LITERACY_TECH: TechKey = 'philosophy';
+
+/**
+ * Techs that reveal resources: the player sees the resource once they own any of them.
+ * Zebasi start with Farming without Organization and can still see crops.
+ * Aquacrop is only shown to tribes that can farm it (see toGameState).
+ */
+export const REVEAL_TECH: Partial<Record<Resource, TechKey[]>> = {
+  crop: ['organization', 'farming'],
+  metal: ['climbing'],
 };
 
-export const BUILDING_ABBR: Record<BuildingKind, string> = {
-  market: 'Mk',
-  sawmill: 'Sw',
-  windmill: 'Wm',
-  forge: 'Fg',
-  lumberhut: 'Lh',
-  farm: 'Fa',
-  mine: 'Mi',
-  aquafarm: 'Aq',
-};
+/** Tech roots in tree order. */
+export const TECH_ROOTS: TechKey[] = TECHS.filter((t) => t.parent === null).map((t) => t.key);

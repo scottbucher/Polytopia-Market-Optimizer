@@ -9,6 +9,9 @@ class Reader {
   constructor(private buf: Uint8Array) {
     this.dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
   }
+  get length() {
+    return this.buf.length;
+  }
   private need(n: number) {
     if (this.pos + n > this.buf.length) throw new Error(`Save file ended early at byte ${this.pos}`);
   }
@@ -74,20 +77,33 @@ export interface RawSave {
   header: RawHeader;
   tiles: RawTile[][]; // [y][x]
   players: RawPlayer[];
+  /** Things worth telling the player (e.g. a game version we haven't tested). */
+  warnings: string[];
 }
+
+/** Game save versions this reader has been checked against. Others are tried, with a warning. */
+export const TESTED_VERSIONS = [124];
+/** Versions where the layout changes (see readTile / readPlayer). */
+export const V_FLOOD_FLAG = 105;
+export const V_NO_AGGRESSION = 114;
+export const V_PLAYER_TRAILING_BYTE = 120;
+/** Improvement id of a city in the save. */
+export const IMP_CITY = 1;
 
 function readHeader(r: Reader, knownVersion?: number): RawHeader {
   if (knownVersion !== undefined) {
     // Skip the few separator bytes between the initial and current blocks.
     const from = r.pos;
-    for (let off = from; off < from + 16; off++) {
+    let found = -1;
+    for (let off = from; off < from + 16 && off + 4 <= r.length; off++) {
       r.pos = off;
       if (r.u32() === knownVersion) {
-        r.pos = off;
+        found = off;
         break;
       }
-      r.pos = from;
     }
+    if (found < 0) throw new Error('Could not find the current game state in this save. This save version may not be supported.');
+    r.pos = found;
   }
   const start = r.pos;
   const version = r.u32();
@@ -95,15 +111,24 @@ function readHeader(r: Reader, knownVersion?: number): RawHeader {
   const currentTurn = r.u32();
   // The rest of the fixed header (game settings) has grown across game versions, so
   // instead of trusting a fixed layout we look for the map name string: a length
-  // byte followed by that many printable characters.
+  // byte followed by that many printable characters, then the map's square size.
+  // The usual spot is tried first.
+  const candidates = [start + 37];
+  for (let off = start + 31; off < start + 60; off++) if (off !== start + 37) candidates.push(off);
   let nameAt = -1;
-  for (let off = start + 31; off < start + 60; off++) {
+  let squareSize = 0;
+  for (const off of candidates) {
+    if (off >= r.length) continue;
     r.pos = off;
     const n = r.u8();
-    if (n === 0 || n > 64) continue;
-    const bytes = r.bytes(Math.min(n, 64));
-    if (bytes.every((c) => c >= 32 && c < 127) && isSquareSizeNext(r)) {
+    if (n > 64 || (n === 0 && off !== start + 37)) continue;
+    if (r.pos + n > r.length) continue;
+    const bytes = r.bytes(n);
+    if (!bytes.every((c) => c >= 0x20 && c !== 0x7f)) continue;
+    const sq = peekSquareSize(r);
+    if (sq) {
       nameAt = off;
+      squareSize = sq;
       break;
     }
   }
@@ -111,12 +136,13 @@ function readHeader(r: Reader, knownVersion?: number): RawHeader {
   r.pos = nameAt;
   const mapName = r.str();
   // Width and height sit right before the first tile, which starts with x=0, y=0.
+  // Polytopia maps are square, and the size matches the one stored with the map name.
   const after = r.pos;
-  for (let off = after + 4; off < after + 400; off++) {
+  for (let off = after + 4; off < after + 400 && off + 14 <= r.length; off++) {
     r.pos = off;
     const w = r.u16();
     const h = r.u16();
-    if (w < 4 || h < 4 || w > 64 || h > 64) continue;
+    if (w !== h || w !== squareSize) continue;
     if (r.u32() === 0 && r.u32() === 0) {
       const terrain = r.u16();
       if (terrain <= 8) {
@@ -128,16 +154,13 @@ function readHeader(r: Reader, knownVersion?: number): RawHeader {
   throw new Error('Could not find the map size. This save version may not be supported.');
 }
 
-function isSquareSizeNext(r: Reader) {
+/** The u32 at the read position if it looks like a map size (4..64), else 0. Doesn't move. */
+function peekSquareSize(r: Reader) {
+  if (r.pos + 4 > r.length) return 0;
   const save = r.pos;
-  try {
-    const sq = r.u32();
-    return sq >= 4 && sq <= 64;
-  } catch {
-    return false;
-  } finally {
-    r.pos = save;
-  }
+  const sq = r.u32();
+  r.pos = save;
+  return sq >= 4 && sq <= 64 ? sq : 0;
 }
 
 function readImprovementData(r: Reader): RawCity {
@@ -197,12 +220,12 @@ function readTile(r: Reader, ex: number, ey: number, version: number): RawTile {
   r.u8(); // water route
   r.u16(); // skin
   r.skip(2);
-  if (version >= 105) {
+  if (version >= V_FLOOD_FLAG) {
     if (r.u8() === 1) r.u32();
   }
   return {
     x, y, terrain, climate, owner, capitalOf, rulingCity, resource, improvement, improvementLevel,
-    city: improvement === 1 ? city : null,
+    city: improvement === IMP_CITY ? city : null,
     visibility,
   };
 }
@@ -211,13 +234,15 @@ function readPlayer(r: Reader, version: number, trailingByte: boolean): RawPlaye
   const id = r.u8();
   const name = r.str();
   r.str(); // account id
-  const autoPlay = r.u8() !== 0;
+  const ap = r.u8();
+  if (ap > 1) throw new Error('odd auto-play flag');
+  const autoPlay = ap === 1;
   r.i32();
   r.i32(); // start tile
   const tribe = r.u16();
   r.u8();
   r.u32(); // handicap
-  if (version < 114) {
+  if (version < V_NO_AGGRESSION) {
     const n = r.u16();
     r.skip(n * 5);
   }
@@ -268,24 +293,44 @@ function readBlock(r: Reader, knownVersion?: number) {
     tiles.push(row);
   }
   const np = r.u16();
+  if (np < 1 || np > 64) throw new Error('Could not read the player list. This save version may not be supported.');
   const start = r.pos;
   let players: RawPlayer[] = [];
-  let ok = false;
-  for (const trailing of [header.version >= 120, header.version < 120]) {
+  let lastError = '';
+  const trailingFirst = header.version >= V_PLAYER_TRAILING_BYTE;
+  for (const trailing of [trailingFirst, !trailingFirst]) {
     r.pos = start;
     try {
-      players = [];
-      for (let i = 0; i < np; i++) players.push(readPlayer(r, header.version, trailing));
-      if (players.every((p) => p.tribe < 64 && p.numCities < 1000)) {
-        ok = true;
+      const list: RawPlayer[] = [];
+      for (let i = 0; i < np; i++) list.push(readPlayer(r, header.version, trailing));
+      const problem = checkPlayers(list, tiles);
+      if (!problem) {
+        players = list;
         break;
       }
-    } catch {
-      // try the other layout
+      lastError = problem;
+    } catch (e) {
+      lastError = e instanceof Error ? e.message : String(e);
     }
   }
-  if (!ok) throw new Error('Could not read the player list. This save version may not be supported.');
+  if (!players.length) throw new Error(`Could not read the player list (${lastError}). This save version may not be supported.`);
   return { header, tiles, players };
+}
+
+/** Sanity checks that tell a correct read from a misaligned one. Returns the problem, or null. */
+function checkPlayers(players: RawPlayer[], tiles: RawTile[][]): string | null {
+  const ids = new Set(players.map((p) => p.id));
+  if (ids.size !== players.length) return 'duplicate player ids';
+  for (const p of players) {
+    if (p.tribe >= 64) return `odd tribe ${p.tribe}`;
+    if (p.numCities >= 1000) return 'odd city count';
+    if (p.techs.some((t) => t >= 64)) return 'odd tech id';
+  }
+  for (const row of tiles)
+    for (const t of row) {
+      if (t.owner !== 0 && !ids.has(t.owner)) return `tile owner ${t.owner} is not a player`;
+    }
+  return null;
 }
 
 /** Parse a .state file. Returns the current game state (not the initial one). */
@@ -295,5 +340,10 @@ export function parseStateFile(bytes: Uint8Array): RawSave {
   r.u32(); // file format version (same as the game state version)
   const initial = readBlock(r); // initial state, only used for the version number
   // A few bytes separate the two blocks; readHeader finds the next header by itself.
-  return readBlock(r, initial.header.version);
+  const current = readBlock(r, initial.header.version);
+  const warnings: string[] = [];
+  if (!TESTED_VERSIONS.includes(current.header.version)) {
+    warnings.push(`This save is from a game version (${current.header.version}) this app hasn't been tested with. Check the map against the game.`);
+  }
+  return { ...current, warnings };
 }

@@ -2,7 +2,6 @@
 // what that player can actually see in the game (no fog-of-war spoilers).
 
 import {
-  DEFAULT_COSTS,
   type Improvement,
   type Resource,
   REVEAL_TECH,
@@ -10,10 +9,12 @@ import {
   type TechKey,
   TECHS,
   type Terrain,
+  TRIBE_BY_KEY,
   tribeFromIdx,
 } from '../data/rules';
+import { defaultSettings } from '../model/defaults';
 import type { City, GameState, Tile } from '../model/types';
-import type { RawSave, RawTile } from './stateFile';
+import { IMP_CITY, type RawSave, type RawTile } from './stateFile';
 
 const TERRAIN: Record<number, Terrain> = {
   1: 'water',
@@ -73,7 +74,6 @@ export function humanPlayers(save: RawSave): HumanPlayer[] {
 export interface LoadReport {
   state: GameState;
   hiddenTiles: number;
-  hiddenResources: number;
   /** Sum of each city's stored production: a starting estimate of non-market income. */
   incomeEstimate: number;
 }
@@ -89,7 +89,7 @@ export function toGameState(save: RawSave, playerId: number, fileName = 'save'):
   let incomeEstimate = 0;
   for (const row of save.tiles) {
     for (const t of row) {
-      if (t.improvement === 1 && t.owner === playerId && t.visibility.includes(playerId)) {
+      if (t.improvement === IMP_CITY && t.owner === playerId && t.visibility.includes(playerId)) {
         cityAt.set(`${t.x},${t.y}`, cities.length);
         cities.push({ name: t.city?.name || `City ${cities.length + 1}`, x: t.x, y: t.y });
         incomeEstimate += Math.max(0, t.city?.production ?? 0);
@@ -97,8 +97,15 @@ export function toGameState(save: RawSave, playerId: number, fileName = 'save'):
     }
   }
 
+  const tribe = tribeFromIdx(player.tribe);
+  // Resources the player can't see yet are left out. We don't count them either:
+  // even the number would be a hint.
+  const canSee = (r: Resource) => {
+    if (r === 'aquacrop') return TRIBE_BY_KEY[tribe].hasAquafarm;
+    const reveal = REVEAL_TECH[r];
+    return !reveal || reveal.some((t) => owned.includes(t));
+  };
   let hiddenTiles = 0;
-  let hiddenResources = 0;
   const tiles: Tile[] = [];
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
@@ -108,16 +115,13 @@ export function toGameState(save: RawSave, playerId: number, fileName = 'save'):
         tiles.push({ terrain: 'unknown', resource: 'none', improvement: 'none', city: null });
         continue;
       }
-      let resource: Resource = raw.resource === -1 ? 'none' : (RESOURCE[raw.resource] ?? 'other');
-      const reveal = REVEAL_TECH[resource];
-      if (reveal && !owned.includes(reveal)) {
-        // The player can't see this resource yet.
-        hiddenResources++;
-        resource = 'none';
-      }
+      // Unknown resource ids are dropped rather than shown as "other": we can't tell
+      // whether the player can see them.
+      let resource: Resource = raw.resource === -1 ? 'none' : (RESOURCE[raw.resource] ?? 'none');
+      if (!canSee(resource)) resource = 'none';
       let improvement: Improvement;
       if (raw.improvement === -1) improvement = 'none';
-      else if (raw.improvement === 1) improvement = raw.owner === playerId ? 'city' : 'other';
+      else if (raw.improvement === IMP_CITY) improvement = raw.owner === playerId ? 'city' : 'other';
       else improvement = IMPROVEMENT[raw.improvement] ?? 'other';
 
       let city: number | null = null;
@@ -137,20 +141,15 @@ export function toGameState(save: RawSave, playerId: number, fileName = 'save'):
     cities,
     source: `${fileName} · turn ${save.header.currentTurn}`,
     settings: {
-      tribe: tribeFromIdx(player.tribe),
+      ...defaultSettings(),
+      tribe,
       owned,
       cityCount: Math.max(1, player.numCities || cities.length),
       stars: player.stars,
       baseIncome: incomeEstimate,
-      allowClear: true,
-      allowBurn: true,
-      allowGrow: true,
-      allowDestroy: false,
-      allowNewTech: true,
-      costs: { ...DEFAULT_COSTS },
     },
   };
-  return { state, hiddenTiles, hiddenResources, incomeEstimate };
+  return { state, hiddenTiles, incomeEstimate };
 }
 
 function nearestCity(cities: City[], x: number, y: number): number | null {

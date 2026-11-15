@@ -1,4 +1,4 @@
-import { useMemo, useRef } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { BUILDING_ABBR, BUILDING_NAMES, type BuildingKind } from '../data/rules';
 import type { GameState } from '../model/types';
 
@@ -44,6 +44,8 @@ interface Props {
   backdrop?: Backdrop | null;
   tileOpacity?: number;
   svgRef?: React.Ref<SVGSVGElement>;
+  /** A paint tool is active: dragging paints instead of scrolling the map. */
+  editing?: boolean;
 }
 
 /** Grid (x,y) -> rotated grid (u,v). */
@@ -92,10 +94,46 @@ function diamond(cx: number, cy: number, s = 1) {
   return `${cx},${cy - h} ${cx + w},${cy} ${cx},${cy + h} ${cx - w},${cy}`;
 }
 
-export function MapView({ state, view, overlay, highlight, onPaint, onHover, backdrop, tileOpacity = 1, svgRef }: Props) {
+export function MapView({ state, view, overlay, highlight, onPaint, onHover, backdrop, tileOpacity = 1, svgRef, editing = false }: Props) {
   const { width: w, height: h } = state;
   const bounds = useMemo(() => mapBounds(view, w, h), [view, w, h]);
   const painting = useRef(false);
+  const [cursor, setCursor] = useState<number | null>(null);
+
+  // Keyboard: arrow keys move a cursor over the tiles (in screen directions), Enter or Space paints.
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    const dirs: Record<string, [number, number]> = { ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0] };
+    if (e.key in dirs) {
+      e.preventDefault();
+      const cur = cursor ?? Math.floor(h / 2) * w + Math.floor(w / 2);
+      const [cx, cy] = tileCenter(view, w, h, cur);
+      const [dx, dy] = dirs[e.key];
+      // The neighbour whose screen position is most in that direction.
+      let best = cur;
+      let bestScore = -Infinity;
+      for (let ny = -1; ny <= 1; ny++)
+        for (let nx = -1; nx <= 1; nx++) {
+          const x = (cur % w) + nx;
+          const y = Math.floor(cur / w) + ny;
+          if ((!nx && !ny) || x < 0 || y < 0 || x >= w || y >= h) continue;
+          const j = y * w + x;
+          const [tx, ty] = tileCenter(view, w, h, j);
+          const vx = (tx - cx) / TW;
+          const vy = (ty - cy) / TH;
+          const len = Math.hypot(vx, vy);
+          const score = (vx * dx + vy * dy) / len - 0.01 * len;
+          if (score > bestScore) {
+            bestScore = score;
+            best = j;
+          }
+        }
+      setCursor(best);
+      onHover?.(best);
+    } else if ((e.key === 'Enter' || e.key === ' ') && cursor !== null && onPaint) {
+      e.preventDefault();
+      onPaint(cursor, true);
+    }
+  };
 
   const order = useMemo(() => {
     const idx = state.tiles.map((_, i) => i);
@@ -155,13 +193,18 @@ export function MapView({ state, view, overlay, highlight, onPaint, onHover, bac
       ref={svgRef}
       className="map"
       viewBox={`${bounds.x} ${bounds.y} ${bounds.w} ${bounds.h}`}
+      // Keep tiles big enough to tap on small screens; the map scrolls instead.
+      style={{ minWidth: Math.round(bounds.w * 0.55), touchAction: editing ? 'none' : 'auto' }}
       onPointerUp={() => (painting.current = false)}
       onPointerLeave={() => {
         painting.current = false;
         onHover?.(null);
       }}
-      role="img"
-      aria-label="Map"
+      tabIndex={0}
+      onKeyDown={onKeyDown}
+      onBlur={() => setCursor(null)}
+      role="application"
+      aria-label={`Map, ${w} by ${h} tiles. Arrow keys move the cursor${onPaint ? ', Enter paints with the selected tool' : ''}.`}
     >
       {backdrop && (
         <image
@@ -214,7 +257,7 @@ export function MapView({ state, view, overlay, highlight, onPaint, onHover, bac
           const els: React.ReactNode[] = [];
           if (existing === 'city') {
             const ci = state.cities.findIndex((c) => c.y * w + c.x === i);
-            els.push(<City key="c" cx={cx} cy={cy} name={state.cities[ci]?.name ?? ''} color={cityColor(t.city ?? ci)} />);
+            els.push(<City key="c" cx={cx} cy={cy} color={cityColor(t.city ?? ci)} />);
           } else if (overlay) {
             if (planned) {
               const isNew = planned !== existing;
@@ -241,8 +284,24 @@ export function MapView({ state, view, overlay, highlight, onPaint, onHover, bac
           return els.length ? <g key={i}>{els}</g> : null;
         })}
       </g>
+      {/* City names last, so plan markers never cover them. */}
+      <g pointerEvents="none" className="citynames">
+        {state.cities.map((c, ci) => {
+          const i = c.y * w + c.x;
+          if (i < 0 || i >= state.tiles.length) return null;
+          const [cx, cy] = tileCenter(view, w, h, i);
+          return (
+            <text key={ci} x={cx} y={cy + 18}>
+              {c.name}
+            </text>
+          );
+        })}
+      </g>
       {highlight != null && (
         <polygon className="hl-ring" points={diamond(...tileCenter(view, w, h, highlight), 1.08)} pointerEvents="none" />
+      )}
+      {cursor != null && cursor !== highlight && (
+        <polygon className="hl-ring cursor" points={diamond(...tileCenter(view, w, h, cursor), 1.08)} pointerEvents="none" />
       )}
     </svg>
   );
@@ -309,13 +368,10 @@ function Removed({ cx, cy }: { cx: number; cy: number }) {
   return <path className="removed" d={`M${cx - 7},${cy - 7} l14,14 M${cx + 7},${cy - 7} l-14,14`} />;
 }
 
-function City({ cx, cy, name, color }: { cx: number; cy: number; name: string; color: string }) {
+function City({ cx, cy, color }: { cx: number; cy: number; color: string }) {
   return (
     <g className="city">
       <path d={`M${cx - 10},${cy + 5} v-14 h4 v4 h4 v-4 h4 v4 h4 v-4 h4 v14 z`} fill={color} />
-      <text x={cx} y={cy + 18}>
-        {name}
-      </text>
     </g>
   );
 }

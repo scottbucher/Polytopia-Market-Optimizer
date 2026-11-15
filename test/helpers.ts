@@ -1,4 +1,4 @@
-import { DEFAULT_COSTS, type TechKey } from '../src/data/rules';
+import { DEFAULT_COSTS, type Improvement, type TechKey } from '../src/data/rules';
 import type { GameState, Settings, Tile } from '../src/model/types';
 
 
@@ -47,4 +47,10 @@ export function makeState(map: string, settings: Partial<Settings> = {}, cityOf?
       ...settings,
     },
   };
+}
+
+/** Puts existing buildings on tiles (by tile index). */
+export function withBuildings(s: GameState, b: Record<number, Improvement>): GameState {
+  for (const [i, v] of Object.entries(b)) s.tiles[Number(i)].improvement = v;
+  return s;
 }

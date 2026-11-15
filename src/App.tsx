@@ -1,39 +1,23 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import {
-  BUILDING_NAMES,
-  type BuildingKind,
-  type CostTable,
-  DEFAULT_COSTS,
-  type Resource,
-  TRIBE_BY_KEY,
-  TRIBES,
-  type Terrain,
-  type TribeKey,
-} from './data/rules';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { BUILDING_KINDS, BUILDING_NAMES, type BuildingKind, type CostTable, DEFAULT_COSTS, TRIBE_BY_KEY, TRIBES, type Terrain, type TribeKey } from './data/rules';
 import { blankState, exampleState } from './model/defaults';
-import { download, loadLocal, parseJson, saveLocal } from './model/io';
-import type { GameState, Goal, Tile } from './model/types';
+import { download, loadLocal, mapJson, parseJson, saveLocal } from './model/io';
+import { applyTool, type Tool } from './model/paint';
+import type { GameState, Goal } from './model/types';
 import { parseStateFile, type RawSave } from './parse/stateFile';
 import { humanPlayers, toGameState } from './parse/toGameState';
-import { currentLayout, type Plan } from './solver/exact';
+import { currentLayout } from './solver/exact';
 import type { GoalResult } from './solver/goals';
-import type { OptimizeResult } from './solver/index';
 import { income } from './solver/income';
 import { techPrice } from './solver/options';
-import { orderActions, simulate } from './solver/schedule';
+import { layoutAfter } from './solver/schedule';
+import { plural, where } from './ui/describe';
 import { type Backdrop, cityColor, MapView, type Overlay, type View } from './ui/MapView';
+import { NumberField } from './ui/NumberField';
 import { ResultsPanel } from './ui/ResultsPanel';
 import { ScreenshotPanel } from './ui/ScreenshotPanel';
 import { TechPicker } from './ui/TechPicker';
-import { where } from './ui/describe';
-
-type Tool =
-  | { kind: 'look' }
-  | { kind: 'terrain'; v: Terrain }
-  | { kind: 'resource'; v: Resource }
-  | { kind: 'building'; v: BuildingKind | 'none' | 'other' }
-  | { kind: 'city' }
-  | { kind: 'territory'; city: number | null };
+import { useOptimizer } from './ui/useOptimizer';
 
 const TERRAINS: [Terrain, string][] = [
   ['field', 'Field'],
@@ -44,33 +28,30 @@ const TERRAINS: [Terrain, string][] = [
   ['unknown', 'Unexplored'],
 ];
 
-const BUILD_TOOLS: (BuildingKind | 'none' | 'other')[] = ['market', 'sawmill', 'windmill', 'forge', 'lumberhut', 'farm', 'mine', 'other', 'none'];
+const BUILD_TOOLS: (BuildingKind | 'none' | 'other')[] = [...BUILDING_KINDS, 'other', 'none'];
 
 export default function App() {
   const [state, setState] = useState<GameState>(() => loadLocal() ?? exampleState());
   const [tool, setTool] = useState<Tool>({ kind: 'look' });
   const [view, setView] = useState<View>({ rot: 0, flip: false });
   const [goal, setGoal] = useState<Goal>({ kind: 'max' });
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [opt, setOpt] = useState<(OptimizeResult & { stateKey: string }) | null>(null);
-  const [picked, setPicked] = useState<{ index: number; result: GoalResult } | null>(null);
   const [hover, setHover] = useState<number | null>(null);
   const [stepHover, setStepHover] = useState<number | null>(null);
   const [pendingSave, setPendingSave] = useState<{ save: RawSave; name: string } | null>(null);
   const [backdrop, setBackdrop] = useState<Backdrop | null>(null);
   const [tileOpacity, setTileOpacity] = useState(1);
   const [showPlan, setShowPlan] = useState(true);
-  const workerRef = useRef<Worker | null>(null);
-  const reqId = useRef(0);
   const saveInput = useRef<HTMLInputElement>(null);
   const jsonInput = useRef<HTMLInputElement>(null);
+  const onError = useCallback((m: string) => setError(m), []);
+  const opt = useOptimizer(onError);
 
   useEffect(() => saveLocal(state), [state]);
 
   const stateKey = useMemo(() => JSON.stringify(state), [state]);
-  const stale = opt !== null && opt.stateKey !== stateKey;
+  const stale = opt.solved !== null && opt.solved.stateKey !== stateKey;
   const s = state.settings;
   const tribe = TRIBE_BY_KEY[s.tribe];
   const curIncome = useMemo(() => income(currentLayout(state), state.width, state.height).total, [state]);
@@ -78,84 +59,29 @@ export default function App() {
   const update = (fn: (s: GameState) => GameState) => setState((prev) => fn(structuredClone(prev)));
   const setSettings = (patch: Partial<GameState['settings']>) => update((st) => ({ ...st, settings: { ...st.settings, ...patch } }));
 
-  // ---------- painting ----------
+  /** Replace the whole map (new, example, loaded): clears results, banners and the screenshot. */
+  const replaceState = (next: GameState, message: string | null) => {
+    setState(next);
+    opt.reset();
+    setPendingSave(null);
+    setError(null);
+    setNotice(message);
+    setHover(null);
+    setStepHover(null);
+    if (backdrop) URL.revokeObjectURL(backdrop.href);
+    setBackdrop(null);
+    setTileOpacity(1);
+  };
+
   const paint = (i: number) => {
     if (tool.kind === 'look') return;
-    update((st) => {
-      const t: Tile = st.tiles[i];
-      switch (tool.kind) {
-        case 'terrain':
-          if (t.improvement === 'city') return st;
-          t.terrain = tool.v;
-          if (t.resource === 'crop' && tool.v !== 'field') t.resource = 'none';
-          if (t.resource === 'metal' && tool.v !== 'mountain') t.resource = 'none';
-          if (tool.v === 'unknown') {
-            t.resource = 'none';
-            t.improvement = 'none';
-          }
-          break;
-        case 'resource':
-          if (tool.v === 'crop') t.terrain = 'field';
-          if (tool.v === 'metal') t.terrain = 'mountain';
-          t.resource = t.resource === tool.v ? 'none' : tool.v;
-          break;
-        case 'building':
-          if (t.improvement === 'city') return st;
-          t.improvement = tool.v;
-          if (tool.v === 'lumberhut') t.terrain = 'forest';
-          if (tool.v === 'mine') {
-            t.terrain = 'mountain';
-            t.resource = 'metal';
-          }
-          if (tool.v === 'farm') {
-            t.terrain = 'field';
-            t.resource = 'crop';
-          }
-          if (['market', 'sawmill', 'windmill'].includes(tool.v) && t.terrain !== 'field') t.terrain = 'field';
-          break;
-        case 'territory':
-          if (t.improvement === 'city') return st;
-          t.city = tool.city;
-          break;
-        case 'city': {
-          const existing = st.cities.findIndex((c) => c.y * st.width + c.x === i);
-          if (existing >= 0) {
-            // remove the city and its territory
-            st.cities.splice(existing, 1);
-            st.tiles.forEach((x) => {
-              if (x.city === existing) x.city = null;
-              else if (x.city !== null && x.city > existing) x.city--;
-            });
-            t.improvement = 'none';
-          } else {
-            const ci = st.cities.length;
-            const x = i % st.width;
-            const y = Math.floor(i / st.width);
-            st.cities.push({ name: `City ${ci + 1}`, x, y });
-            t.terrain = 'field';
-            t.resource = 'none';
-            t.improvement = 'city';
-            for (let dy = -1; dy <= 1; dy++)
-              for (let dx = -1; dx <= 1; dx++) {
-                const nx = x + dx;
-                const ny = y + dy;
-                if (nx < 0 || ny < 0 || nx >= st.width || ny >= st.height) continue;
-                const n = st.tiles[ny * st.width + nx];
-                if (n.city === null) n.city = ci;
-              }
-            t.city = ci;
-            st.settings.cityCount = Math.max(st.settings.cityCount, st.cities.length);
-          }
-          break;
-        }
-      }
-      return st;
-    });
+    update((st) => applyTool(st, tool, i));
   };
 
   // ---------- loading ----------
   const loadSaveFile = async (f: File) => {
     setError(null);
+    setNotice(null);
     try {
       const save = parseStateFile(new Uint8Array(await f.arrayBuffer()));
       const humans = humanPlayers(save);
@@ -163,75 +89,46 @@ export default function App() {
       if (humans.length === 1) applySave(save, humans[0].id, f.name);
       else setPendingSave({ save, name: f.name });
     } catch (e) {
-      setError(`Couldn't read that save: ${e instanceof Error ? e.message : String(e)}`);
+      setError(`Couldn't read that save file. ${e instanceof Error ? e.message : String(e)} Make sure it is a .state file from the game's save folder.`);
     }
   };
 
   const applySave = (save: RawSave, playerId: number, name: string) => {
-    const r = toGameState(save, playerId, name);
-    setState(r.state);
-    setOpt(null);
-    setPicked(null);
-    setPendingSave(null);
-    const cur = income(currentLayout(r.state), r.state.width, r.state.height).total;
-    setNotice(
-      `Loaded turn ${save.header.currentTurn}: ${r.state.cities.length} cities. ${r.hiddenTiles} tiles you haven't explored are hidden` +
-        (r.hiddenResources ? `, and ${r.hiddenResources} resources you can't see yet are left out` : '') +
-        `. Your markets make ${cur}★ now. Check "Income per turn" below against the number in the game.`,
-    );
+    try {
+      const r = toGameState(save, playerId, name);
+      const cur = income(currentLayout(r.state), r.state.width, r.state.height).total;
+      replaceState(
+        r.state,
+        [
+          `Loaded turn ${save.header.currentTurn}: ${plural(r.state.cities.length, 'city', 'cities')}.`,
+          r.hiddenTiles ? `${plural(r.hiddenTiles, 'tile')} you haven't explored ${r.hiddenTiles === 1 ? 'is' : 'are'} hidden.` : '',
+          `Your markets make ${cur}★ now.`,
+          `"Income per turn" is an estimate: check it against the +★ number in the game.`,
+          ...save.warnings,
+        ]
+          .filter(Boolean)
+          .join(' '),
+      );
+    } catch (e) {
+      setPendingSave(null);
+      setError(`Couldn't use that save. ${e instanceof Error ? e.message : String(e)}`);
+    }
   };
 
   const loadJson = async (f: File) => {
     try {
-      setState(parseJson(await f.text()));
-      setOpt(null);
-      setPicked(null);
-      setNotice(`Opened ${f.name}.`);
+      replaceState(parseJson(await f.text()), `Opened ${f.name}.`);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
   };
 
-  // ---------- solving ----------
-  const solve = () => {
-    setError(null);
-    setBusy(true);
-    setPicked(null);
-    workerRef.current?.terminate();
-    const w = new Worker(new URL('./solver/worker.ts', import.meta.url), { type: 'module' });
-    workerRef.current = w;
-    const id = ++reqId.current;
-    const key = stateKey;
-    w.onmessage = (e) => {
-      if (e.data.id !== id) return;
-      setBusy(false);
-      w.terminate();
-      if (!e.data.ok) setError(e.data.error);
-      else setOpt({ ...(e.data.result as OptimizeResult), stateKey: key });
-    };
-    w.onerror = (e) => {
-      setBusy(false);
-      setError(e.message || 'The optimizer crashed.');
-    };
-    w.postMessage({ id, state, goal });
-  };
-
-  const shown: GoalResult | null = picked?.result ?? opt?.result ?? null;
-  const selectedIndex = picked?.index ?? (opt && shown ? opt.frontier.plans.indexOf(shown.plan) : -1);
-
-  const pickPlan = (i: number) => {
-    if (!opt) return;
-    const plan: Plan = opt.frontier.plans[i];
-    const bundles = orderActions(state, plan);
-    const schedule = simulate(state, bundles);
-    setPicked({
-      index: i,
-      result: { plan, bundles, schedule, met: true, summary: `This plan earns ${plan.income}★ per turn from markets for ${plan.cost}★ in total.` },
-    });
-  };
+  // ---------- results ----------
+  const shown: GoalResult | null = opt.picked?.result ?? opt.solved?.result ?? null;
+  const selectedIndex = opt.picked?.index ?? (opt.solved && shown ? opt.solved.frontier.plans.indexOf(shown.plan) : -1);
 
   const overlay: Overlay | null = useMemo(() => {
-    if (!shown || !showPlan) return null;
+    if (!shown || !showPlan || stale) return null;
     const steps = new Map<number, number[]>();
     shown.schedule.steps.forEach((st, n) => {
       if (st.action.kind === 'tech') return;
@@ -240,25 +137,14 @@ export default function App() {
       steps.set(st.action.tile, l);
     });
     // Layout after the steps in this schedule (income goals may stop before the full plan).
-    const layout = currentLayout(state);
-    const removed = new Set<number>();
-    for (const st of shown.schedule.steps) {
-      const a = st.action;
-      if (a.kind === 'op' && a.op === 'destroy') {
-        layout[a.tile] = null;
-        removed.add(a.tile);
-      }
-      if (a.kind === 'build') {
-        layout[a.tile] = a.build;
-        removed.delete(a.tile);
-      }
-    }
+    const { layout, removed } = layoutAfter(state, shown.schedule.steps.map((x) => x.action));
     return { layout, steps, removed, marketIncome: income(layout, state.width, state.height).markets };
-  }, [shown, showPlan, state]);
+  }, [shown, showPlan, state, stale]);
 
   const hoverTile = stepHover ?? hover;
   const hoverInfo = hover !== null ? describeTile(state, hover) : null;
   const unsupported = !tribe.hasMarket;
+  const busy = opt.busy === 'solve';
 
   return (
     <div className="app">
@@ -268,29 +154,43 @@ export default function App() {
           <span className="tag">for The Battle of Polytopia</span>
         </div>
         <div className="actions">
-          <input ref={saveInput} type="file" accept=".state" hidden onChange={(e) => e.target.files?.[0] && loadSaveFile(e.target.files[0])} />
-          <input ref={jsonInput} type="file" accept=".json,application/json" hidden onChange={(e) => e.target.files?.[0] && loadJson(e.target.files[0])} />
+          <input
+            ref={saveInput}
+            type="file"
+            accept=".state"
+            hidden
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              e.target.value = '';
+              if (f) loadSaveFile(f);
+            }}
+          />
+          <input
+            ref={jsonInput}
+            type="file"
+            accept=".json,application/json"
+            hidden
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              e.target.value = '';
+              if (f) loadJson(f);
+            }}
+          />
           <button type="button" onClick={() => saveInput.current?.click()}>
             Open save file
           </button>
           <button type="button" className="secondary" onClick={() => jsonInput.current?.click()}>
             Open map
           </button>
-          <button type="button" className="secondary" onClick={() => download('polytopia-map.json', JSON.stringify(state, null, 1))}>
+          <button type="button" className="secondary" onClick={() => download('polytopia-map.json', mapJson(state))}>
             Save map
           </button>
           <NewMap
             onCreate={(w, h) => {
-              setState(blankState(w, h));
-              setOpt(null);
-              setPicked(null);
+              replaceState(blankState(w, h), null);
               setTool({ kind: 'terrain', v: 'field' });
             }}
-            onExample={() => {
-              setState(exampleState());
-              setOpt(null);
-              setPicked(null);
-            }}
+            onExample={() => replaceState(exampleState(), null)}
           />
         </div>
       </header>
@@ -306,7 +206,7 @@ export default function App() {
         </div>
       )}
       {notice && (
-        <div className="banner info">
+        <div className="banner info" role="status">
           <span>{notice}</span>
           <button type="button" className="link" onClick={() => setNotice(null)}>
             Dismiss
@@ -314,7 +214,7 @@ export default function App() {
         </div>
       )}
       {error && (
-        <div className="banner err">
+        <div className="banner err" role="alert">
           <span>{error}</span>
           <button type="button" className="link" onClick={() => setError(null)}>
             Dismiss
@@ -341,6 +241,11 @@ export default function App() {
             <ToolBtn active={tool.kind === 'resource' && tool.v === 'metal'} onClick={() => setTool({ kind: 'resource', v: 'metal' })}>
               Metal
             </ToolBtn>
+            {tribe.hasAquafarm && (
+              <ToolBtn active={tool.kind === 'resource' && tool.v === 'aquacrop'} onClick={() => setTool({ kind: 'resource', v: 'aquacrop' })}>
+                Water crop
+              </ToolBtn>
+            )}
             <span className="sep" />
             <select
               aria-label="Building"
@@ -350,7 +255,7 @@ export default function App() {
               <option value="" disabled>
                 Building…
               </option>
-              {BUILD_TOOLS.map((b) => (
+              {BUILD_TOOLS.filter((b) => b !== 'aquafarm' || tribe.hasAquafarm).map((b) => (
                 <option key={b} value={b}>
                   {b === 'none' ? 'Remove building' : b === 'other' ? 'Other (temple, port…)' : BUILDING_NAMES[b]}
                 </option>
@@ -375,10 +280,10 @@ export default function App() {
               <option value="null">Not yours</option>
             </select>
             <span className="grow" />
-            <button type="button" className="icon" title="Rotate map" onClick={() => setView({ ...view, rot: ((view.rot + 1) % 4) as View['rot'] })}>
+            <button type="button" className="icon" title="Rotate map" aria-label="Rotate map" onClick={() => setView({ ...view, rot: ((view.rot + 1) % 4) as View['rot'] })}>
               ⟳
             </button>
-            <button type="button" className="icon" title="Mirror map" onClick={() => setView({ ...view, flip: !view.flip })}>
+            <button type="button" className="icon" title="Mirror map" aria-label="Mirror map" onClick={() => setView({ ...view, flip: !view.flip })}>
               ⇋
             </button>
           </div>
@@ -392,11 +297,14 @@ export default function App() {
               onHover={setHover}
               backdrop={backdrop}
               tileOpacity={tileOpacity}
+              editing={tool.kind !== 'look'}
             />
           </div>
           <div className="mapfoot">
-            <span className="muted small">{hoverInfo ?? `${state.source ?? ''} · ${state.width}×${state.height}`}</span>
-            {shown && (
+            <span className="muted small" aria-live="polite">
+              {hoverInfo ?? `${state.source ?? ''} · ${state.width}×${state.height}`}
+            </span>
+            {shown && !stale && (
               <label className="small">
                 <input type="checkbox" checked={showPlan} onChange={(e) => setShowPlan(e.target.checked)} /> Show plan on map
               </label>
@@ -428,6 +336,7 @@ export default function App() {
                     <span className="dot" style={{ background: cityColor(i) }} />
                     <input
                       value={c.name}
+                      aria-label={`Name of city ${i + 1}`}
                       onChange={(e) =>
                         update((st) => {
                           st.cities[i].name = e.target.value;
@@ -458,30 +367,26 @@ export default function App() {
               </label>
               <label>
                 Cities you own
-                <input type="number" min={1} value={s.cityCount} onChange={(e) => setSettings({ cityCount: Math.max(1, Number(e.target.value)) })} />
+                <NumberField min={1} value={s.cityCount} onChange={(v) => setSettings({ cityCount: v })} />
               </label>
               <label>
                 Stars now
-                <input type="number" min={0} value={s.stars} onChange={(e) => setSettings({ stars: Math.max(0, Number(e.target.value)) })} />
+                <NumberField min={0} value={s.stars} onChange={(v) => setSettings({ stars: v })} />
               </label>
-              <label title="The +★ per turn number shown in the game. Markets you already have are counted automatically.">
+              <label title="The +★ per turn number shown in the game. The markets you already have are part of it.">
                 Income per turn
-                <input
-                  type="number"
-                  min={0}
-                  value={s.baseIncome + curIncome}
-                  onChange={(e) => setSettings({ baseIncome: Math.max(0, Number(e.target.value) - curIncome) })}
-                />
+                <NumberField min={curIncome} value={s.baseIncome + curIncome} onChange={(v) => setSettings({ baseIncome: Math.max(0, v - curIncome) })} />
+                <small className="muted">{curIncome > 0 ? `incl. ${curIncome}★ from markets` : 'from everything you have'}</small>
               </label>
             </div>
             {tribe.note && <p className="small warn">{tribe.note}</p>}
-            <p className="muted small">Tech costs use {s.cityCount} cities. Tap a tech to mark it owned.</p>
+            <p className="muted small">Tech costs use {plural(s.cityCount, 'city', 'cities')}. Tap a tech to mark it owned.</p>
             <TechPicker owned={s.owned} tribe={s.tribe} prices={(t) => techPrice(state, t)} onChange={(owned) => setSettings({ owned })} />
           </section>
 
           <section className="panel open">
-            <h2>What do you want?</h2>
-            <div className="goals" role="radiogroup">
+            <h2 id="goal-label">What do you want?</h2>
+            <div className="goals" role="radiogroup" aria-labelledby="goal-label">
               <GoalOpt checked={goal.kind === 'max'} onSelect={() => setGoal({ kind: 'max' })} title="Most market income" desc="Highest stars per turn, at the lowest cost for that income." />
               <GoalOpt
                 checked={goal.kind === 'income'}
@@ -491,9 +396,8 @@ export default function App() {
               >
                 {goal.kind === 'income' && (
                   <span className="inline">
-                    <input type="number" min={1} value={goal.income} onChange={(e) => setGoal({ ...goal, income: Number(e.target.value) })} />
-                    ★ per turn from markets within
-                    <input type="number" min={1} value={goal.turns} onChange={(e) => setGoal({ ...goal, turns: Number(e.target.value) })} /> turns
+                    <NumberField aria-label="Market income to reach" min={1} max={999} value={goal.income} onChange={(v) => setGoal({ ...goal, income: v })} />★ per turn from markets within
+                    <NumberField aria-label="Within how many turns" min={0} max={200} value={goal.turns} onChange={(v) => setGoal({ ...goal, turns: v })} /> turns
                   </span>
                 )}
               </GoalOpt>
@@ -505,8 +409,8 @@ export default function App() {
               >
                 {goal.kind === 'bank' && (
                   <span className="inline">
-                    <input type="number" min={1} value={goal.stars} onChange={(e) => setGoal({ ...goal, stars: Number(e.target.value) })} />★ by turn +
-                    <input type="number" min={1} value={goal.turns} onChange={(e) => setGoal({ ...goal, turns: Number(e.target.value) })} />
+                    <NumberField aria-label="Stars to have" min={0} max={9999} value={goal.stars} onChange={(v) => setGoal({ ...goal, stars: v })} />★ by turn +
+                    <NumberField aria-label="Turns from now" min={0} max={200} value={goal.turns} onChange={(v) => setGoal({ ...goal, turns: v })} />
                   </span>
                 )}
               </GoalOpt>
@@ -518,7 +422,7 @@ export default function App() {
               >
                 {goal.kind === 'best-by' && (
                   <span className="inline">
-                    by turn +<input type="number" min={1} value={goal.turns} onChange={(e) => setGoal({ ...goal, turns: Number(e.target.value) })} />
+                    by turn +<NumberField aria-label="Turns from now" min={0} max={200} value={goal.turns} onChange={(v) => setGoal({ ...goal, turns: v })} />
                   </span>
                 )}
               </GoalOpt>
@@ -531,26 +435,29 @@ export default function App() {
               <Toggle label="grow forest" checked={s.allowGrow} onChange={(v) => setSettings({ allowGrow: v })} />
               <Toggle label="destroy buildings" checked={s.allowDestroy} onChange={(v) => setSettings({ allowDestroy: v })} />
             </fieldset>
-            <button type="button" className="primary" onClick={solve} disabled={busy || unsupported || state.cities.length === 0}>
-              {busy ? 'Working…' : opt ? 'Solve again' : 'Find the best layout'}
+            <button type="button" className="primary" onClick={() => opt.solve(state, goal, stateKey)} disabled={busy || unsupported || state.cities.length === 0}>
+              {busy ? 'Working…' : opt.solved ? 'Solve again' : 'Find the best layout'}
             </button>
             {state.cities.length === 0 && <p className="small muted">Add at least one city to the map first.</p>}
             {stale && <p className="small warn">You changed something since the last solve. Solve again to update.</p>}
           </section>
 
-          {shown && opt && (
+          {shown && opt.solved && (
             <section className="panel open">
               <h2>Plan</h2>
               <ResultsPanel
+                key={`${opt.solved.runId}:${selectedIndex}`}
                 state={state}
                 goal={goal}
                 result={shown}
-                frontier={opt.frontier.plans}
+                frontier={opt.solved.frontier.plans}
                 currentIncome={curIncome}
                 selected={selectedIndex}
-                onSelect={pickPlan}
+                onSelect={(i) => opt.pick(state, i, opt.solved!.frontier.plans[i])}
                 onHoverTile={setStepHover}
-                ms={opt.ms}
+                ms={opt.solved.ms}
+                stale={stale}
+                loading={opt.busy === 'plan'}
               />
             </section>
           )}
@@ -590,7 +497,7 @@ function GoalOpt({ checked, onSelect, title, desc, children }: { checked: boolea
   return (
     <div className={`goal${checked ? ' on' : ''}`}>
       <label>
-        <input type="radio" checked={checked} onChange={onSelect} />
+        <input type="radio" name="goal" checked={checked} onChange={onSelect} />
         <span>
           <strong>{title}</strong>
           <small>{desc}</small>
@@ -612,8 +519,10 @@ function Toggle({ label, checked, onChange, disabled }: { label: string; checked
 
 function NewMap({ onCreate, onExample }: { onCreate: (w: number, h: number) => void; onExample: () => void }) {
   const [size, setSize] = useState(16);
+  const ref = useRef<HTMLDetailsElement>(null);
+  const close = () => ref.current?.removeAttribute('open');
   return (
-    <details className="newmap">
+    <details className="newmap" ref={ref}>
       <summary className="btn secondary">New map</summary>
       <div className="pop">
         <label>
@@ -626,10 +535,23 @@ function NewMap({ onCreate, onExample }: { onCreate: (w: number, h: number) => v
             ))}
           </select>
         </label>
-        <button type="button" onClick={() => onCreate(size, size)}>
+        <button
+          type="button"
+          onClick={() => {
+            onCreate(size, size);
+            close();
+          }}
+        >
           Blank map
         </button>
-        <button type="button" className="secondary" onClick={onExample}>
+        <button
+          type="button"
+          className="secondary"
+          onClick={() => {
+            onExample();
+            close();
+          }}
+        >
           Example map
         </button>
       </div>
@@ -637,19 +559,14 @@ function NewMap({ onCreate, onExample }: { onCreate: (w: number, h: number) => v
   );
 }
 
-const COST_LABELS: [keyof CostTable, string][] = [
-  ['market', 'Market'],
-  ['sawmill', 'Sawmill'],
-  ['windmill', 'Windmill'],
-  ['forge', 'Forge'],
-  ['lumberhut', 'Lumber Hut'],
-  ['farm', 'Farm'],
-  ['mine', 'Mine'],
+const COST_LABELS: [keyof CostTable, string, { min?: number; integer?: boolean }?][] = [
+  ...BUILDING_KINDS.map((k): [keyof CostTable, string] => [k, BUILDING_NAMES[k]]),
   ['clearForestRefund', 'Clear forest (stars back)'],
   ['burnForest', 'Burn forest'],
   ['growForest', 'Grow forest'],
   ['destroy', 'Destroy'],
   ['techBase', 'Tech cost: tier × cities +'],
+  ['literacyFactor', 'Tech price with Philosophy (×)', { integer: false }],
 ];
 
 function RulesEditor({ costs, onChange }: { costs: CostTable; onChange: (c: CostTable) => void }) {
@@ -660,10 +577,10 @@ function RulesEditor({ costs, onChange }: { costs: CostTable; onChange: (c: Cost
         With Philosophy, techs cost about a third less. Change these if the game gets patched.
       </p>
       <div className="grid2">
-        {COST_LABELS.map(([k, label]) => (
+        {COST_LABELS.map(([k, label, o]) => (
           <label key={k}>
             {label}
-            <input type="number" value={costs[k]} step={1} onChange={(e) => onChange({ ...costs, [k]: Number(e.target.value) })} />
+            <NumberField min={0} max={k === 'literacyFactor' ? 1 : 999} step={o?.integer === false ? 0.01 : 1} integer={o?.integer !== false} value={costs[k]} onChange={(v) => onChange({ ...costs, [k]: v })} />
           </label>
         ))}
       </div>
