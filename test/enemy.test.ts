@@ -88,8 +88,8 @@ describe('enemy units in the solver', () => {
     // The lumber hut can't be destroyed (destroy is off) and the city centre never changes,
     // so only the empty field counts.
     expect(enemyBlocked(s)).toEqual([1]);
-    expect(enemyNote(1)).toBe('1 of your tiles has an enemy unit on it, so the plan leaves it alone. Refresh your save once they move.');
-    expect(enemyNote(2)).toMatch(/^2 of your tiles have enemy units on them/);
+    expect(enemyNote(1)).toBe('1 of your tiles has an enemy unit on it, so the plan leaves it alone. Refresh your save once it moves.');
+    expect(enemyNote(2)).toBe('2 of your tiles have enemy units on them, so the plan leaves them alone. Refresh your save once they move.');
     expect(enemyNote(0)).toBe('');
   });
 });
@@ -120,10 +120,10 @@ describe('enemy units on the map', () => {
     raw.tiles[i].enemy = 'yes';
     raw.tiles[i + 1].enemy = 1;
     expect(parseJson(JSON.stringify(raw)).tiles.filter((t) => 'enemy' in t)).toEqual([]);
-    const u = s.tiles.findIndex((t) => t.terrain === 'unknown');
-    if (u >= 0) {
-      raw.tiles[u].enemy = true;
-      expect(parseJson(JSON.stringify(raw)).tiles[u]).not.toHaveProperty('enemy');
-    }
+    // An enemy on an unexplored tile is dropped (the example map is all explored, so make one).
+    const u = i + 2;
+    raw.tiles[u].terrain = 'unknown';
+    raw.tiles[u].enemy = true;
+    expect(parseJson(JSON.stringify(raw)).tiles[u]).toEqual({ terrain: 'unknown', resource: raw.tiles[u].resource, improvement: raw.tiles[u].improvement, city: raw.tiles[u].city });
   });
 });

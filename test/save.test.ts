@@ -1,11 +1,13 @@
 import { existsSync, readFileSync } from 'fs';
+import { fileURLToPath } from 'url';
 import { describe, expect, it } from 'vitest';
+import { MIN_POPULATION } from '../src/data/rules';
 import { parseStateFile } from '../src/parse/stateFile';
 import { humanPlayers, toGameState } from '../src/parse/toGameState';
 import { runOptimizer } from '../src/solver';
 
 // Put your own save at test/fixtures/game.state to run this (*.state is git-ignored).
-const FIXTURE = ['test/fixtures/game.state', 'test/fixtures/scott-singleplayer.state'].find((f) => existsSync(f));
+const FIXTURE = ['fixtures/game.state', 'fixtures/scott-singleplayer.state'].map((f) => fileURLToPath(new URL(f, import.meta.url))).find((f) => existsSync(f));
 
 describe.skipIf(!FIXTURE)('real save file', () => {
   it('parses, hides fog, reads units, and optimizes', () => {
@@ -36,7 +38,7 @@ describe.skipIf(!FIXTURE)('real save file', () => {
     expect(r.state.turn).toBe(save.header.currentTurn);
     for (const c of r.state.cities) {
       expect(c.level).toBeGreaterThanOrEqual(1);
-      expect(c.population).toBeGreaterThanOrEqual(0);
+      expect(c.population).toBeGreaterThanOrEqual(MIN_POPULATION);
       expect(c.population).toBeLessThanOrEqual(c.level!);
     }
     const out = runOptimizer(r.state, { kind: 'best-by', turns: 12 });

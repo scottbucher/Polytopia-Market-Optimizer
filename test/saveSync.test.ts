@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { parseStateFile } from '../src/parse/stateFile';
 import { toGameState } from '../src/parse/toGameState';
 import { detectOs, SAVE_HINTS, saveHint } from '../src/ui/savePaths';
-import { changed, formatAgo, gameKeyOf, makeLink, mergeRefresh, newestStateFile, sameGame, withRetry } from '../src/ui/saveSync';
+import { noFollowReason } from '../src/ui/LoadSave';
+import { changed, formatAgo, gameKeyOf, isMultiplayerFolder, loadNotice, makeLink, mergeRefresh, newestStateFile, routeSave, sameGame, withRetry } from '../src/ui/saveSync';
 import { type FakeTile, makeSave } from './saveWriter';
 
 const UA = {
@@ -84,7 +85,7 @@ describe('following a folder', () => {
   });
 });
 
-function world(size: number, production = 3): FakeTile[][] {
+function world(size: number, production = 3, city: Partial<FakeTile> = {}): FakeTile[][] {
   const tiles: FakeTile[][] = [];
   for (let y = 0; y < size; y++) {
     const row: FakeTile[] = [];
@@ -94,18 +95,18 @@ function world(size: number, production = 3): FakeTile[][] {
     }
     tiles.push(row);
   }
-  tiles[1][1] = { ...tiles[1][1], improvement: 1, cityName: 'Home', production };
+  tiles[1][1] = { ...tiles[1][1], improvement: 1, cityName: 'Home', production, ...city };
   return tiles;
 }
 
-const save = (o: { size?: number; turn?: number; stars?: number; production?: number; techs?: number[] } = {}) =>
+const save = (o: { size?: number; turn?: number; stars?: number; production?: number; techs?: number[]; humans?: number; city?: Partial<FakeTile> } = {}) =>
   parseStateFile(
     makeSave({
       turn: o.turn ?? 7,
-      tiles: world(o.size ?? 6, o.production),
+      tiles: world(o.size ?? 6, o.production, o.city),
       players: [
-        { id: 1, name: 'Me', tribe: 4, stars: o.stars ?? 9, techs: o.techs ?? [] },
-        { id: 2, name: 'Bot', tribe: 7, stars: 50, techs: [], ai: true },
+        { id: 1, name: 'Me', tribe: 4, stars: o.stars ?? 9, techs: o.techs ?? [], ai: o.humans === 0 },
+        { id: 2, name: 'Bot', tribe: 7, stars: 50, techs: [], ai: (o.humans ?? 1) < 2 },
       ],
     }),
   );
@@ -132,7 +133,7 @@ describe('refreshing the same game', () => {
     const first = toGameState(save({ stars: 9, production: 3 }), 1, '123.state');
     // What you changed in the planner since the first load.
     const prev = structuredClone(first.state);
-    prev.settings = { ...prev.settings, allowClear: false, allowBurn: false, allowGrow: false, allowDestroy: true, allowNewTech: false, baseIncome: first.incomeEstimate + 2 };
+    prev.settings = { ...prev.settings, allowClear: false, allowBurn: false, allowGrow: false, allowDestroy: true, allowNewTech: false, cityUpgrades: false, baseIncome: first.incomeEstimate + 2 };
     prev.settings.costs = { ...prev.settings.costs, market: 7 };
     prev.tiles[20].terrain = 'forest';
     prev.cities[0].name = 'Renamed';
@@ -144,10 +145,11 @@ describe('refreshing the same game', () => {
     expect(next.settings.stars).toBe(25);
     expect(next.settings.owned).toEqual(later.state.settings.owned);
     expect(next.tiles).toEqual(later.state.tiles);
-    expect(next.cities).toEqual(later.state.cities);
+    expect(next.cities).toEqual([{ ...later.state.cities[0], name: 'Renamed' }]);
     expect(next.source).toBe(later.state.source);
+    expect(next.turn).toBe(9);
     // Kept:
-    expect(next.settings).toMatchObject({ allowClear: false, allowBurn: false, allowGrow: false, allowDestroy: true, allowNewTech: false });
+    expect(next.settings).toMatchObject({ allowClear: false, allowBurn: false, allowGrow: false, allowDestroy: true, allowNewTech: false, cityUpgrades: false });
     expect(next.settings.costs.market).toBe(7);
     // Your +2 correction to the estimate rides along as the estimate grows from 3 to 5.
     expect(later.incomeEstimate).toBe(5);
@@ -163,6 +165,14 @@ describe('refreshing the same game', () => {
     prev.settings.baseIncome = 1; // you said 2 less than the estimate
     expect(mergeRefresh(prev, 3, toGameState(save({ production: 5 }), 1).state).settings.baseIncome).toBe(3);
     expect(mergeRefresh(prev, 3, toGameState(save({ production: 1 }), 1).state).settings.baseIncome).toBe(0);
+  });
+
+  it('keeps city names only where the city still is', () => {
+    const prev = toGameState(save(), 1).state;
+    prev.cities[0].name = 'Renamed';
+    const moved = toGameState(save(), 1).state;
+    moved.cities[0] = { ...moved.cities[0], x: 2 };
+    expect(mergeRefresh(prev, 0, moved).cities[0].name).toBe('Home');
   });
 
   it('keeps any extra fields the save adds', () => {
@@ -230,5 +240,72 @@ describe('sync status', () => {
     expect(formatAgo(3 * 3600_000)).toBe('3 h ago');
     expect(formatAgo(24 * 3600_000)).toBe('24 h ago');
     expect(formatAgo(48 * 3600_000)).toBe('2 days ago');
+  });
+});
+
+describe('what a read means', () => {
+  const link = makeLink('folder', { name: '123.state', lastModified: 5, size: 99 }, save(), 1, 3);
+
+  it('a refresh of the game on screen keeps your settings', () => {
+    expect(routeSave(link, save({ turn: 9 }), '123.state', 'refresh')).toEqual({ kind: 'refresh', playerId: 1 });
+    expect(routeSave(link, save({ turn: 9 }), '123.state', 'auto')).toEqual({ kind: 'refresh', playerId: 1 });
+    // Opening the same file on purpose starts afresh.
+    expect(routeSave(link, save(), '123.state', 'load')).toEqual({ kind: 'replace', playerId: 1 });
+  });
+
+  it('another game replaces the map and says why', () => {
+    expect(routeSave(link, save(), '456.state', 'auto')).toEqual({ kind: 'replace', playerId: 1, note: 'Found a new game in the save folder.' });
+    expect(routeSave(link, save({ size: 7 }), '123.state', 'refresh')).toEqual({ kind: 'replace', playerId: 1, note: 'That save is a different game, so it replaced the map.' });
+    expect(routeSave(null, save(), '123.state', 'refresh')).toMatchObject({ kind: 'replace' });
+  });
+
+  it('asks who you are when a new save has more than one human', () => {
+    expect(routeSave(null, save({ humans: 2 }), 'a.state', 'load')).toEqual({ kind: 'ask' });
+    // Still the same game for the player you picked.
+    expect(routeSave(link, save({ humans: 2 }), '123.state', 'auto')).toEqual({ kind: 'refresh', playerId: 1 });
+    const other = { ...link, playerId: 7 };
+    expect(routeSave(other, save({ humans: 2 }), '123.state', 'refresh')).toEqual({ kind: 'ask', note: 'That save is a different game, so it replaced the map.' });
+  });
+
+  it('says so when there is no human player, also on a refresh', () => {
+    expect(routeSave(null, save({ humans: 0 }), 'a.state', 'load')).toEqual({ kind: 'error', message: 'No human player found in this save.' });
+    expect(routeSave(link, save({ humans: 0 }), '123.state', 'refresh')).toMatchObject({ kind: 'error' });
+    expect(routeSave(link, save({ humans: 0 }), '123.state', 'auto')).toMatchObject({ kind: 'error' });
+  });
+
+  it('the banner after loading', () => {
+    const s = save({ turn: 12 });
+    const r = toGameState(s, 1, 'a.state');
+    expect(loadNotice(s, r, 4, 'Found a new game in the save folder.')).toBe(
+      `Found a new game in the save folder. Loaded turn 12: 1 city. ${r.hiddenTiles ? `${r.hiddenTiles} tiles you haven't explored are hidden. ` : ''}Your markets make 4★ now. "Income per turn" is an estimate: check it against the +★ number in the game.`,
+    );
+    expect(r.state.source).toBe('a.state');
+  });
+});
+
+describe('population below zero in a save', () => {
+  it('is kept, and takes stars off the income estimate', () => {
+    const r = toGameState(save({ production: 2, city: { level: 3, population: -2 } }), 1);
+    expect(r.state.cities[0]).toMatchObject({ level: 3, population: -2 });
+    // Level 3 + production 2 - 1 = 4★, less 2.
+    expect(r.incomeEstimate).toBe(2);
+    expect(toGameState(save({ production: 2, city: { level: 3, population: 2 } }), 1).incomeEstimate).toBe(4);
+    expect(toGameState(save({ production: 1, city: { level: 1, population: -9 } }), 1).incomeEstimate).toBe(0);
+  });
+});
+
+describe('following a folder', () => {
+  it('never reads the multiplayer folder', () => {
+    expect(isMultiplayerFolder('Multiplayer')).toBe(true);
+    expect(isMultiplayerFolder('multiplayer')).toBe(true);
+    expect(isMultiplayerFolder('Singleplayer')).toBe(false);
+  });
+
+  it('says why auto-update is off, for the system you are on', () => {
+    expect(noFollowReason('chromeos', true)).toMatch(/can't work here/);
+    expect(noFollowReason('android', false)).toMatch(/can't work here/);
+    expect(noFollowReason('mac', true)).toMatch(/Mac/);
+    expect(noFollowReason('windows', false)).toBe('Auto-update needs Chrome or Edge.');
+    expect(noFollowReason('windows', true)).toBe('For auto-update, load the save folder with Load game save.');
   });
 });

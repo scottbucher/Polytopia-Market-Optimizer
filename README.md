@@ -41,9 +41,9 @@ Each game is one `<game id>.state` file. Copy it somewhere first if you want to 
 
 ### Keeping in sync
 
-After you load a save, a bar above the map shows when it was read, with a **Refresh** button that reads it again. A refresh of the same game takes stars, techs, the map and cities from the save but keeps what the save doesn't know: your goal, what the plan may do, rules and costs, and your correction to "Income per turn". If a plan is showing, it is marked out of date; press **Solve again** when you want a new one.
+After you load a save, a bar above the map shows when it was read, with a **Refresh** button that reads it again. A refresh of the same game takes stars, techs, the map and cities from the save but keeps what the save doesn't know: your goal, city names you typed, what the plan may do, rules and costs, and your correction to "Income per turn". Changes you painted on the map are replaced by the save's. If a plan is showing, it is marked out of date; press **Solve again** when you want a new one.
 
-- **Chrome and Edge on Windows** can keep hold of the save: choose the **Singleplayer folder** (or the `Polytopia` folder above it) and the planner follows the game you're playing, including new games. **Keep up to date** reads the save by itself whenever the game writes it (it checks every few seconds while the tab is showing). After you reload the page, one click on **Reconnect** picks it up again.
+- **Chrome and Edge on Windows** can keep hold of the save: choose the **Singleplayer folder** (or the `Polytopia` folder above it) and the planner follows the game you're playing, including new games. It never reads the Multiplayer folder (load a multiplayer save as one file). **Keep up to date** reads the save by itself whenever the game writes it (it checks every few seconds while the tab is showing). After you reload the page, one click on **Reconnect** picks it up again.
 - **Firefox and Safari**, and Chrome on Mac or Linux: **Refresh** opens the file dialog again (it opens in the same folder). Auto-update isn't possible there: Firefox and Safari can't read a file again after it changes, and Chrome doesn't let pages read app data folders on Mac (`~/Library`) or Linux (`~/.config`, `~/.local/share`).
 
 ## Rules used
@@ -70,15 +70,16 @@ City growth:
 
 - A city at level L levels up when its population reaches L + 1; extra population carries over. Each level adds 1★ per turn by itself.
 - The economic reward at each level: level 2 Workshop (+1★ per turn, instead of an Explorer), level 3 Resources (+5★ at once, instead of a City wall), level 4 Population growth (+3 population, which can level the city again, instead of Border growth), level 5 and up Park (+1★ per turn, instead of a super unit).
-- A city's income is its level, plus 1 per Workshop and Park, plus 1 for the capital. In a save, a city's `production` is 1 + its Workshops and Parks, and `population` is the progress toward the next level.
+- A city's income is its level, plus 1 per Workshop and Park, plus 1 for the capital. In a save, a city's `population` is the progress toward the next level and `production` is 1 + its Workshops and Parks.
+- Destroying a building takes its population away again (a hut next to a sawmill also takes the sawmill's level). A city never loses a level: its population goes below zero (red pips in the game), and each point below zero costs 1★ per turn of that city's income, down to nothing. The planner counts this in the build order and in "Income per turn" from a save.
 
-Population numbers come from the game's logic data. The level rewards are not in that data: they come from the game itself, checked against a real save (each city's stars and population pips, and the +★ total).
+Population numbers come from the game's logic data. The level rewards are not in that data: they come from the game itself, checked against a real save (each city's stars and population pips, and the +★ total). The rules for destroying come from the [wiki](https://polytopia.fandom.com/wiki/Population) and haven't been checked against a save yet.
 
 Not modelled:
 
-- City level-ups are only partly modelled. The search picks layouts by market income alone, so it never adds a building just to level a city up; level-ups are counted when the build order is ordered and simulated (steps that level a city up go earlier, and bank goals credit the rewards). Population lost when a building is destroyed isn't counted. Turn the rewards off with "count city upgrade rewards" if you'd rather take the other choices.
+- City level-ups are only partly modelled. The search picks layouts by market income alone, so it never adds a building just to level a city up; level-ups are counted when the build order is ordered and simulated (steps that level a city up go earlier, and bank goals credit the rewards). Turn the rewards off with "count city upgrade rewards" if you'd rather take the other choices.
 - Aquarion's Fertilize (turning wetland into crops).
-- The non-market part of your income is a starting estimate when loading a save (each city's level plus its Workshops and Parks, plus 1 for the capital). Check "Income per turn" against the game.
+- The non-market part of your income is a starting estimate when loading a save (each city's level plus its Workshops and Parks, plus 1 for the capital, less any population below zero). A city with an enemy unit in it is counted in full, though it may make nothing while it is occupied. Check "Income per turn" against the game.
 - Temples, ports and other buildings are never torn down to make room.
 
 ## How the optimizer works

@@ -3,6 +3,7 @@
 
 import {
   type Improvement,
+  MIN_POPULATION,
   type Resource,
   REVEAL_TECH,
   TECH_IDX_ALIASES,
@@ -104,13 +105,16 @@ export function toGameState(save: RawSave, playerId: number, fileName = 'save'):
         const city: City = { name: t.city?.name || `City ${cities.length + 1}`, x: t.x, y: t.y };
         if (t.city && t.city.level >= 1) {
           city.level = t.city.level;
-          // `population` is the progress toward the next level (the filled pips in the game).
-          city.population = Math.max(0, Math.min(t.city.level, t.city.population));
+          // `population` is the progress toward the next level (the filled pips in the game);
+          // below zero after buildings were destroyed.
+          city.population = Math.max(MIN_POPULATION, Math.min(t.city.level, t.city.population));
         }
         cities.push(city);
         // A city makes its level in stars, plus 1 per Workshop and Park; the save's
-        // `production` is 1 + Workshops + Parks. The capital makes 1 more.
-        incomeEstimate += Math.max(0, (t.city ? t.city.level + t.city.production - 1 : 0) + (t.capitalOf === playerId ? 1 : 0));
+        // `production` is 1 + Workshops + Parks. The capital makes 1 more. Each population
+        // below zero takes 1★ off, down to nothing.
+        const made = (t.city ? t.city.level + t.city.production - 1 : 0) + (t.capitalOf === playerId ? 1 : 0);
+        incomeEstimate += Math.max(0, made - Math.max(0, -(city.population ?? 0)));
       }
     }
   }
@@ -159,7 +163,7 @@ export function toGameState(save: RawSave, playerId: number, fileName = 'save'):
     height,
     tiles,
     cities,
-    source: `${fileName} · turn ${save.header.currentTurn}`,
+    source: fileName,
     turn: save.header.currentTurn,
     settings: {
       ...defaultSettings(),

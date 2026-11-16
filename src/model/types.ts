@@ -10,7 +10,7 @@ export interface Tile {
    * A unit of another player stands here, on a tile you can see. While it is there you
    * can't build, destroy or change the terrain on this tile. Absent = no such unit.
    */
-  enemy?: boolean;
+  enemy?: true;
 }
 
 export interface City {
@@ -19,7 +19,10 @@ export interface City {
   y: number;
   /** City level (1 = just founded). Absent on hand-drawn maps until set. */
   level?: number;
-  /** Population toward the next level (the filled pips under the city in the game). */
+  /**
+   * Population toward the next level (the filled pips under the city in the game).
+   * Below zero (red pips) after destroying buildings: each one costs 1★ per turn.
+   */
   population?: number;
 }
 
@@ -49,7 +52,7 @@ export interface GameState {
   tiles: Tile[];
   cities: City[];
   settings: Settings;
-  /** Free-form info about where the state came from (file name, turn). */
+  /** Free-form info about where the state came from (the save's file name). */
   source?: string;
   /** The game's current turn (from the save, or typed in). Plans show game turn numbers from it. */
   turn?: number;
@@ -60,6 +63,9 @@ export type Goal =
   | { kind: 'income'; income: number; turns: number }
   | { kind: 'bank'; stars: number; turns: number }
   | { kind: 'best-by'; turns: number };
+
+/** The game's current turn. Hand-drawn maps start at turn 1 until you set it. */
+export const turnNow = (state: Pick<GameState, 'turn'>) => state.turn ?? 1;
 
 export function idx(state: { width: number }, x: number, y: number) {
   return y * state.width + x;

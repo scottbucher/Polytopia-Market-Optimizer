@@ -1,4 +1,4 @@
-import { BUILDING_KINDS, type CostTable, DEFAULT_COSTS, type Improvement, type Resource, TECHS, type TechKey, type Terrain, TRIBE_BY_KEY } from '../data/rules';
+import { BUILDING_KINDS, type CostTable, DEFAULT_COSTS, type Improvement, MIN_POPULATION, type Resource, TECHS, type TechKey, type Terrain, TRIBE_BY_KEY } from '../data/rules';
 import { defaultSettings } from './defaults';
 import type { City, GameState, Settings, Tile } from './types';
 
@@ -103,8 +103,8 @@ function cityGrowth(c: Partial<City>): Pick<City, 'level' | 'population'> {
   const level = c.level;
   if (!Number.isInteger(level) || level! < 1 || level! > 999) return {};
   const pop = Number.isInteger(c.population) ? c.population! : 0;
-  // A city levels up once its population reaches level + 1.
-  return { level, population: Math.min(level!, Math.max(0, pop)) };
+  // A city levels up once its population reaches level + 1; it can be below zero.
+  return { level, population: Math.min(level!, Math.max(MIN_POPULATION, pop)) };
 }
 
 export function download(name: string, text: string) {

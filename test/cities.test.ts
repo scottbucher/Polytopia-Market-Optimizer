@@ -1,15 +1,30 @@
 import { describe, expect, it } from 'vitest';
-import { CITY_REWARDS, cityReward, popToLevelUp } from '../src/data/rules';
+import { type BuildingKind, CITY_REWARDS, cityReward, popToLevelUp, TECHS } from '../src/data/rules';
 import type { GameState } from '../src/model/types';
-import { grow, type Growth, growthStart, popGain } from '../src/solver/cities';
-import { currentLayout } from '../src/solver/exact';
+import { grow, type Growth, growthStart, growthValue, popGain, popPenalty } from '../src/solver/cities';
+import { currentLayout, type Plan } from '../src/solver/exact';
+import type { Op } from '../src/solver/options';
 import { evaluateGoal } from '../src/solver/goals';
+import { describeUpgrades, paybackTurns } from '../src/ui/describe';
 import { type Layout, neighborTable } from '../src/solver/income';
 import { orderActions, simulate } from '../src/solver/schedule';
 import { search } from '../src/solver/search';
 import { makeState, withBuildings } from './helpers';
 
 const one = (level: number, pop: number): Growth => ({ level: [level], pop: [pop], on: [true] });
+
+/** A plan of just these changes (tile, building, terrain actions first). */
+const planOf = (changes: [number, BuildingKind | null, Op[]?][]): Plan => ({
+  changes: changes.map(([tile, build, ops = []]) => ({ tile, option: { build, ops, keep: false, cost: 0, techs: [] } })),
+  layout: [],
+  techs: [],
+  income: 0,
+  cost: 0,
+  techCost: 0,
+  techPrices: {},
+});
+const ALL_TECHS = TECHS.map((t) => t.key);
+const buildTiles = (bundles: { kind: string; tile?: number }[][]) => bundles.flat().flatMap((a) => (a.kind === 'build' ? [a.tile!] : []));
 
 describe('city level rules', () => {
   it('a city at level L needs L + 1 population', () => {
@@ -76,6 +91,56 @@ describe('population and level-ups', () => {
     expect(ups.reduce((n, u) => n + u.income, 0)).toBe(1 + 2);
   });
 
+  it('counts each changed tile once, however often the bundle lists it', () => {
+    const s = makeState('f.f\n.C.\n...');
+    const nb = neighborTable(s.width, s.height);
+    const before: Layout = currentLayout(s);
+    const after = [...before];
+    after[at(s, 0, 0)] = 'lumberhut';
+    after[at(s, 1, 0)] = 'sawmill';
+    // A burn then a build lists the tile twice.
+    const tiles = [at(s, 0, 0), at(s, 0, 0), at(s, 1, 0), at(s, 1, 0)];
+    expect(popGain(s, nb, (i) => before[i], (i) => after[i], tiles, new Map()).get(0)).toBe(1 + 1);
+  });
+
+  it('destroying takes the population away, and a new producer counts its own kind', () => {
+    const s = makeState('fff\n.CM\n...');
+    const nb = neighborTable(s.width, s.height);
+    const before: Layout = currentLayout(s);
+    before[at(s, 0, 0)] = 'lumberhut';
+    before[at(s, 1, 0)] = 'lumberhut';
+    before[at(s, 2, 0)] = 'lumberhut';
+    before[at(s, 2, 1)] = 'mine';
+    before[at(s, 1, 2)] = 'sawmill'; // level 0: no hut next to it
+    before[at(s, 0, 1)] = 'sawmill'; // level 2
+    const get = (l: Layout) => (i: number) => l[i];
+    // Destroying a hut: -1 for the hut, -1 for the level the sawmill loses.
+    const noHut = [...before];
+    noHut[at(s, 0, 0)] = null;
+    expect(popGain(s, nb, get(before), get(noHut), [at(s, 0, 0)], new Map()).get(0)).toBe(-2);
+    // A sawmill at level 2 (2 population) replaced by a forge with no mine next to it.
+    const forge = [...before];
+    forge[at(s, 0, 1)] = 'forge';
+    expect(popGain(s, nb, get(before), get(forge), [at(s, 0, 1)], new Map()).get(0)).toBe(-2);
+    const forge2 = [...before];
+    forge2[at(s, 1, 2)] = 'forge'; // level 1 (the mine): +2, the level-0 sawmill gave nothing
+    expect(popGain(s, nb, get(before), get(forge2), [at(s, 1, 2)], new Map()).get(0)).toBe(2);
+  });
+
+  it('population can go below zero without losing a level, and costs 1★ per turn each', () => {
+    const g = one(2, 1);
+    expect(grow(g, 0, -3)).toEqual([]);
+    expect([g.level[0], g.pop[0]]).toEqual([2, -2]);
+    expect(popPenalty(2, -2)).toBe(2);
+    // Never more than the city makes (at least its level).
+    expect(popPenalty(2, -5)).toBe(2);
+    expect(popPenalty(2, 1)).toBe(0);
+    expect(growthValue(one(1, 0), new Map([[0, -2]]))).toEqual({ stars: 0, income: -1 });
+    // Growing back from below zero levels up only once the city is full again.
+    expect(growthValue(one(2, -2), new Map([[0, 4]]))).toEqual({ stars: 0, income: 2 });
+    expect(growthValue(one(2, -2), new Map([[0, 5]]))).toEqual({ stars: 5, income: 3 });
+  });
+
   it('cities with an unknown level are left out', () => {
     const s = makeState('...\n.C.\n...');
     expect(growthStart(s)).toBeNull();
@@ -115,19 +180,21 @@ fC.
     // The first hut adds 2 population (the hut and the sawmill's new level): level 3, take Resources.
     const sch = simulate(grown, orderActions(grown, top).bundles, 10);
     const first = sch.steps.find((x) => x.levelUps)!;
-    expect(first.levelUps![0]).toMatchObject({ city: 0, level: 3, reward: 'resources', stars: 5 });
+    expect(first.levelUps).toEqual([{ city: 0, level: 3, reward: 'resources', stars: 5, income: 1 }]);
     expect(first.starsAfter).toBe(first.starsBefore - first.action.cost + 5);
-    expect(sch.upgradeStars).toBeGreaterThanOrEqual(5);
+    expect(sch.steps.flatMap((x) => x.levelUps ?? []).map((u) => u.level)).toEqual([3, 4, 5]);
+    expect([sch.upgradeStars, sch.upgradeIncome, sch.popPenalty]).toEqual([5, 4, 0]);
 
     // The same plan without known levels: the difference is the +5★ and the extra stars per turn.
     const plainSch = simulate(plain, orderActions(plain, top).bundles, 10);
     expect(plainSch.steps.some((x) => x.levelUps)).toBe(false);
-    expect(sch.starsAtTurn[10]).toBeGreaterThanOrEqual(plainSch.starsAtTurn[10] + 5);
+    expect([plainSch.upgradeStars, plainSch.upgradeIncome]).toEqual([0, 0]);
+    expect(sch.starsAtTurn[10] - plainSch.starsAtTurn[10]).toBe(47);
 
     const goal = { kind: 'best-by', turns: 10 } as const;
     const withUps = evaluateGoal(grown, f, goal)!;
     const without = evaluateGoal(plain, f, goal)!;
-    expect(withUps.bankAtDeadline!).toBeGreaterThanOrEqual(without.bankAtDeadline! + 5);
+    expect(withUps.bankAtDeadline! - without.bankAtDeadline!).toBe(47);
     // Building nothing levels nothing.
     expect(withUps.bankIfNothing).toBe(without.bankIfNothing);
   });
@@ -141,5 +208,101 @@ fC.
     const f = search(plain, { objectives: [{ kind: 'weighted', w: 1000 }] });
     const goal = { kind: 'best-by', turns: 10 } as const;
     expect(evaluateGoal(off, f, goal)!.bankAtDeadline).toBe(evaluateGoal(plain, f, goal)!.bankAtDeadline);
+  });
+});
+
+describe('ordering with level-ups', () => {
+  // One row: each group is a market and a sawmill with a lumber hut to build next to the sawmill.
+  // Every hut is worth +1★ per turn from the market for 3★; what differs is the level-ups.
+  const row = (map: string, cityOf: (x: number) => number, b: Record<number, 'market' | 'sawmill'>) =>
+    withBuildings(makeState(map, { owned: ALL_TECHS, stars: 3, baseIncome: 0 }, (x) => cityOf(x)), b);
+
+  it('a bundle that levels a city up goes first', () => {
+    const s = row('...C.....C....', (x) => (x < 7 ? 0 : 1), { 0: 'market', 1: 'sawmill', 12: 'sawmill', 13: 'market' });
+    s.cities[0].level = 2;
+    s.cities[0].population = 2; // the hut's +2 fills it: Resources, +5★
+    s.cities[1].level = 5; // +2 of 6: nothing
+    const plan = planOf([
+      [11, 'lumberhut'],
+      [2, 'lumberhut'],
+    ]);
+    expect(buildTiles(orderActions(s, plan).bundles)).toEqual([2, 11]);
+    s.settings.cityUpgrades = false;
+    expect(buildTiles(orderActions(s, plan).bundles)).toEqual([11, 2]);
+  });
+
+  it("a level-up re-scores the city's other bundles, also through a producer across the border", () => {
+    // City 0 owns both groups' markets and sawmills; the right-hand hut stands in city 2.
+    const cityOf = (x: number) => (x === 7 ? 2 : x <= 9 ? 0 : x <= 15 ? 1 : 2);
+    const s = row('...C.......C....C.', cityOf, { 0: 'market', 1: 'sawmill', 8: 'sawmill', 9: 'market', 14: 'sawmill', 15: 'market' });
+    s.cities[0].level = 2;
+    s.cities[0].population = 2; // either left or right fills it (Resources: the hut is free)
+    s.cities[1].level = 1; // its hut levels it up too: Workshop, +2★ per turn
+    s.cities[2].level = 9;
+    const plan = planOf([
+      [2, 'lumberhut'],
+      [7, 'lumberhut'],
+      [13, 'lumberhut'],
+    ]);
+    // After the left hut, the right one no longer levels city 0 up, so city 1's hut is better.
+    expect(buildTiles(orderActions(s, plan).bundles)).toEqual([2, 13, 7]);
+  });
+
+  it('level-up income can pay for a step that market income never would', () => {
+    const s = row('...C....', () => 0, { 5: 'sawmill' });
+    s.cities[0].level = 1;
+    s.cities[0].population = 1;
+    const plan = planOf([
+      [4, 'lumberhut'], // +2 population: level 2, Workshop
+      [6, 'market'], // 5★, and no market income comes in to pay for it
+    ]);
+    const { bundles } = orderActions(s, plan);
+    const sch = simulate(s, bundles, 1);
+    expect(sch.unaffordable).toBe(0);
+    expect([sch.upgradeStars, sch.upgradeIncome, sch.popPenalty]).toEqual([0, 2, 0]);
+    // The hut on turn 0; the Workshop and the level pay 2★ a turn, so the 5★ market waits for turn 3.
+    expect(sch.steps.map((x) => x.turn)).toEqual([0, 3]);
+  });
+
+  it('destroying a farm leaves the city below zero and costs stars each turn', () => {
+    const s = withBuildings(makeState(',C.', { owned: ALL_TECHS, stars: 0, baseIncome: 2, allowDestroy: true }), { 0: 'farm' });
+    s.cities[0].level = 1;
+    s.cities[0].population = 0;
+    const sch = simulate(s, [orderActions(s, planOf([[0, null, ['destroy']]])).bundles.flat()], 3);
+    expect(sch.steps).toHaveLength(1);
+    // -2 population costs 1★ per turn: all a level-1 city makes.
+    expect(sch.popPenalty).toBe(1);
+    expect(sch.starsAtTurn).toEqual([0, 1, 2, 3]);
+    s.settings.cityUpgrades = false;
+    expect(simulate(s, [orderActions(s, planOf([[0, null, ['destroy']]])).bundles.flat()], 3).starsAtTurn).toEqual([0, 2, 4, 6]);
+  });
+});
+
+describe('the plan says what level-ups add', () => {
+  const s = makeState('...\n.C.\n...');
+  s.cities[0].name = 'Wopix';
+  const up = (level: number) => {
+    const r = cityReward(level)!;
+    return { city: 0, level, reward: r.reward, stars: r.stars, income: 1 + r.income };
+  };
+
+  it('one level-up by name, with where its stars come from', () => {
+    expect(describeUpgrades(s, [up(5)])).toBe('Wopix levels up on the way: +2★ per turn (Park +1, level +1).');
+    expect(describeUpgrades(s, [up(3)])).toBe('Wopix levels up on the way: +5★ now and +1★ per turn (level +1).');
+    expect(describeUpgrades(s, [up(4)])).toBe('Wopix levels up on the way: +3 population and +1★ per turn (level +1).');
+  });
+
+  it('several in total', () => {
+    expect(describeUpgrades(s, [up(2), up(3)])).toBe('2 city upgrades on the way add 5★ and +3★ per turn (each level adds 1★ itself): take the economic reward each time.');
+  });
+
+  it('pays for itself counting level-ups', () => {
+    const none = { upgradeStars: 0, upgradeIncome: 0, popPenalty: 0 };
+    expect(paybackTurns(none, 10, 2)).toBe(5);
+    expect(paybackTurns(none, 10, 0)).toBeNull();
+    expect(paybackTurns({ ...none, upgradeIncome: 3 }, 10, 2)).toBe(2);
+    expect(paybackTurns({ ...none, upgradeStars: 5 }, 10, 2)).toBe(3);
+    expect(paybackTurns({ ...none, upgradeStars: 12 }, 10, 2)).toBe(0);
+    expect(paybackTurns({ ...none, popPenalty: 2 }, 10, 2)).toBeNull();
   });
 });

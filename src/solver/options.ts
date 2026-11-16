@@ -171,7 +171,8 @@ export function enemyBlocked(state: GameState): number[] {
   state.tiles.forEach((t, i) => {
     if (!t.enemy) return;
     const tiles = [...state.tiles];
-    tiles[i] = { ...t, enemy: false };
+    const { enemy: _, ...free } = t;
+    tiles[i] = free;
     if (tileOptions({ ...state, tiles }, i).length > 1) out.push(i);
   });
   return out;

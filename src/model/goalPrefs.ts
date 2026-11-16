@@ -3,7 +3,10 @@
 // Deadlines are stored as game turns ("by turn 30"), so loading a newer save of the
 // same game keeps the same deadline. The solver works in turns from now.
 
-import type { GameState, Goal } from './types';
+import { readPref, writePref } from './prefs';
+import type { Goal } from './types';
+
+export { turnNow } from './types';
 
 export type GoalKind = Goal['kind'];
 
@@ -23,20 +26,18 @@ const KEY = 'market-planner/goals/v1';
 
 export const defaultGoalPrefs = (): GoalPrefs => ({ kind: 'max', income: {}, bank: { stars: 30 }, 'best-by': {} });
 
-/** The game's current turn. Hand-drawn maps start at turn 1 until you set it. */
-export const turnNow = (state: Pick<GameState, 'turn'>) => state.turn ?? 1;
-
 const int = (v: unknown, min: number, max: number): number | undefined => (Number.isInteger(v) && (v as number) >= min && (v as number) <= max ? (v as number) : undefined);
 
-/** Reads saved goal settings. Anything missing or out of range falls back to the default. */
-export function parseGoalPrefs(text: string | null | undefined): GoalPrefs {
+/** Reads saved goal settings (JSON text, or already parsed). Anything missing or out of range falls back to the default. */
+export function parseGoalPrefs(saved: unknown): GoalPrefs {
   const d = defaultGoalPrefs();
-  if (!text) return d;
-  let raw: unknown;
-  try {
-    raw = JSON.parse(text);
-  } catch {
-    return d;
+  let raw = saved;
+  if (typeof raw === 'string') {
+    try {
+      raw = JSON.parse(raw);
+    } catch {
+      return d;
+    }
   }
   if (!raw || typeof raw !== 'object') return d;
   const r = raw as Record<string, Record<string, unknown> | undefined> & { kind?: unknown };
@@ -52,21 +53,9 @@ export function parseGoalPrefs(text: string | null | undefined): GoalPrefs {
 
 export const goalPrefsJson = (p: GoalPrefs) => JSON.stringify(p);
 
-export function loadGoalPrefs(): GoalPrefs {
-  try {
-    return parseGoalPrefs(localStorage.getItem(KEY));
-  } catch {
-    return defaultGoalPrefs();
-  }
-}
+export const loadGoalPrefs = (): GoalPrefs => parseGoalPrefs(readPref<unknown>(KEY, null));
 
-export function saveGoalPrefs(p: GoalPrefs) {
-  try {
-    localStorage.setItem(KEY, goalPrefsJson(p));
-  } catch {
-    /* storage unavailable */
-  }
-}
+export const saveGoalPrefs = (p: GoalPrefs) => writePref(KEY, p);
 
 export interface ResolvedGoal {
   /** What the solver gets: deadlines as turns from now. */
