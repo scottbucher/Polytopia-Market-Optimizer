@@ -137,7 +137,12 @@ export function evaluateGoal(state: GameState, frontier: Frontier, goal: Goal): 
     }
   };
   // A few plans spread over the frontier, then the neighbours of the best one until nothing improves.
-  for (const i of spreadIdx(plans.length, plans.length <= 40 ? plans.length : 12)) tryPlan(i);
+  const spread = spreadIdx(plans.length, plans.length <= 40 ? plans.length : 12);
+  for (const i of spread) tryPlan(i);
+  // Then every plan between the spread points either side of the best one.
+  const lo = Math.max(0, ...spread.filter((i) => i < bestIdx));
+  const hi = Math.min(plans.length - 1, ...spread.filter((i) => i > bestIdx));
+  for (let i = lo; i <= hi; i++) tryPlan(i);
   for (let guard = 0; guard < plans.length; guard++) {
     const at = bestIdx;
     for (const d of [-2, -1, 1, 2]) if (at + d >= 0 && at + d < plans.length) tryPlan(at + d);
