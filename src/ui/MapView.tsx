@@ -283,19 +283,6 @@ export function MapView({ state, view, overlay, highlight, onPaint, onHover, bac
           return els.length ? <g key={i}>{els}</g> : null;
         })}
       </g>
-      {/* City names last, so plan markers never cover them. */}
-      <g pointerEvents="none" className="citynames">
-        {state.cities.map((c, ci) => {
-          const i = c.y * w + c.x;
-          if (i < 0 || i >= state.tiles.length) return null;
-          const [cx, cy] = tileCenter(view, w, h, i);
-          return (
-            <text key={ci} x={cx} y={cy + 18}>
-              {c.name}
-            </text>
-          );
-        })}
-      </g>
       {/* Step numbers and market income on top of everything, with a halo. */}
       {overlay && (
         <g pointerEvents="none" className="maplabels">
@@ -327,6 +314,19 @@ export function MapView({ state, view, overlay, highlight, onPaint, onHover, bac
           })}
         </g>
       )}
+      {/* City names on top of the plan labels, so they stay readable. */}
+      <g pointerEvents="none" className="citynames">
+        {state.cities.map((c, ci) => {
+          const i = c.y * w + c.x;
+          if (i < 0 || i >= state.tiles.length) return null;
+          const [cx, cy] = tileCenter(view, w, h, i);
+          return (
+            <text key={ci} x={cx} y={cy + 18}>
+              {c.name}
+            </text>
+          );
+        })}
+      </g>
       {highlight != null && (
         <polygon className="hl-ring" points={diamond(...tileCenter(view, w, h, highlight), 1.08)} pointerEvents="none" />
       )}

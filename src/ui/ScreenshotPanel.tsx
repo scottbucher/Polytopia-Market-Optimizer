@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Terrain } from '../data/rules';
 import type { GameState } from '../model/types';
 import { type Backdrop, mapBounds, tileCenter, type View } from './MapView';
@@ -21,6 +21,10 @@ interface Props {
 export function ScreenshotPanel({ state, view, backdrop, setBackdrop, tileOpacity, setTileOpacity, onGuess }: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [msg, setMsg] = useState<string | null>(null);
+  // A new map clears the screenshot, and its message with it.
+  useEffect(() => {
+    if (!backdrop) setMsg(null);
+  }, [backdrop]);
 
   const load = (f: File) => {
     if (backdrop) URL.revokeObjectURL(backdrop.href);

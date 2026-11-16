@@ -97,6 +97,12 @@ describe('saved maps: limits', () => {
     expect(p.settings.cityCount).toBe(1);
     expect(p.settings.allowDestroy).toBe(defaultSettings().allowDestroy);
     expect(p.settings.allowGrow).toBe(defaultSettings().allowGrow);
+    const t = base();
+    t.settings.costs.market = 1e9;
+    t.settings.costs.literacyFactor = 5;
+    t.settings.cityCount = 1e9;
+    const q = parseJson(JSON.stringify(t));
+    expect([q.settings.costs.market, q.settings.costs.literacyFactor, q.settings.cityCount]).toEqual([999, 1, 999]);
   });
 });
 

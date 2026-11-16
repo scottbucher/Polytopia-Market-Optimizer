@@ -1,6 +1,7 @@
 // Cases found in review, each pinned to the right answer (checked against brute force).
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { exampleState } from '../src/model/defaults';
 import type { GameState } from '../src/model/types';
 import { evaluateGoal } from '../src/solver/goals';
 import { income } from '../src/solver/income';
@@ -174,5 +175,11 @@ describe('round 3 solver findings', () => {
   it('an income goal looks past the cheapest few plans', () => {
     const { state, goal } = load('r3-income.json');
     expect(runOptimizer(state, goal).result!.reachedTurn).toBe(12);
+  });
+});
+
+describe('round 4 findings', () => {
+  it('finds the 15★ maximum on the example map', () => {
+    expect(runOptimizer(exampleState(), { kind: 'max' }).frontier.maxIncome).toBe(15);
   });
 });

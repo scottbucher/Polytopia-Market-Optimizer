@@ -149,13 +149,14 @@ class Search {
     return revert;
   }
 
-  climb(obj: Objective, rng: () => number, maxSweeps = 25) {
+  /** Hill-climb. With `region`, only those slots move and the costlier global moves are skipped. */
+  climb(obj: Objective, rng: () => number, maxSweeps = 25, region?: number[]) {
     const { c } = this;
     let cur = this.score(obj).v;
     const n = c.tiles.length;
     for (let sweep = 0; sweep < maxSweeps; sweep++) {
       let improved = false;
-      const order = shuffle([...Array(n).keys()], rng);
+      const order = shuffle(region ? [...region] : [...Array(n).keys()], rng);
       for (const s of order) {
         for (let k = 0; k < c.opts[s].length; k++) {
           if (k === this.choice[s]) continue;
@@ -192,6 +193,7 @@ class Search {
         }
       }
       if (improved) continue;
+      if (region) break;
       if (this.tripleMoves(obj, cur) || this.routeSwaps(obj, cur)) {
         cur = this.score(obj).v;
         continue;
@@ -439,6 +441,9 @@ export function undominated(state: GameState, opts: TileOption[]): TileOption[] 
   return opts.filter((_, i) => !opts.some((_, j) => j !== i && beats(j, i)));
 }
 
+/** How far around a kick the follow-up climb may change tiles. */
+const KICK_RADIUS = 3;
+
 function planToChoice(c: Ctx, plan: Plan | null): number[] {
   const choice = [...c.keepIdx];
   if (!plan) return choice;
@@ -474,6 +479,8 @@ export interface SearchOptions {
   seeds?: number;
   /** How many more tech families (best seed of each) to improve per objective. */
   families?: number;
+  /** Random restarts around the richest layout (see search()). */
+  kicks?: number;
 }
 
 export function search(state: GameState, opts: SearchOptions): Frontier {
@@ -521,6 +528,26 @@ export function search(state: GameState, opts: SearchOptions): Frontier {
       climbed.push({ s, fam: b.fam });
     }
   });
+
+  // Kicks (iterated local search) on the richest layout: scramble a tile and its
+  // neighbours, climb again, keep it if richer. Finds layouts that need several
+  // buildings moved at once, which single climbs miss.
+  const maxObj: Objective = { kind: 'weighted', w: 1000 };
+  let champ = climbed.reduce<Search | null>((b, x) => (!b || x.s.score(maxObj).v > b.score(maxObj).v ? x.s : b), null);
+  if (champ && c.tiles.length) {
+    for (let it = 0; it < (opts.kicks ?? 24); it++) {
+      const s = new Search(c, champ.choice);
+      s.archive = archive.archive;
+      const center = Math.floor(rng() * c.tiles.length);
+      const kicked = [center, ...c.adj[center]];
+      let region = kicked;
+      for (let r = 0; r < KICK_RADIUS; r++) region = [...new Set(region.flatMap((t) => [t, ...c.adj[t]]))];
+      if (!s.tryMove(kicked.map((t) => [t, Math.floor(rng() * c.opts[t].length)]))) continue;
+      s.climb(maxObj, rng, 10, region);
+      if (s.score(maxObj).v > champ.score(maxObj).v + 1e-9) champ = s;
+    }
+    climbed.push({ s: champ, fam: '#kick' });
+  }
 
   // Clean up: prune every recorded layout, then peel the richest layout of each family
   // down one building at a time so the middle income levels get real candidates too.

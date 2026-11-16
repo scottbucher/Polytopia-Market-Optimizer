@@ -123,13 +123,21 @@ export default function App() {
     try {
       replaceState(parseJson(await f.text()), `Opened ${f.name}.`);
     } catch (e) {
+      setNotice(null);
       setError(e instanceof Error ? e.message : String(e));
     }
   };
 
   // ---------- results ----------
   const shown: GoalResult | null = opt.picked?.result ?? opt.solved?.result ?? null;
-  const selectedIndex = opt.picked?.index ?? (opt.solved && shown ? opt.solved.frontier.plans.indexOf(shown.plan) : -1);
+  // A goal can stop part way through a plan; then mark the plan the build order really ends at.
+  const selectedIndex =
+    opt.picked?.index ??
+    (opt.solved && shown
+      ? shown.schedule.finalIncome === shown.plan.income
+        ? opt.solved.frontier.plans.indexOf(shown.plan)
+        : opt.solved.frontier.plans.findIndex((p) => p.income === shown.schedule.finalIncome)
+      : -1);
 
   const overlay: Overlay | null = useMemo(() => {
     if (!shown || !showPlan || stale) return null;

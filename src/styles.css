@@ -497,7 +497,7 @@ details.panel[open] > summary {
 }
 .branch {
   display: grid;
-  grid-template-columns: 96px 1fr;
+  grid-template-columns: 112px 1fr;
   gap: 6px;
   align-items: center;
 }
@@ -526,6 +526,10 @@ details.panel[open] > summary {
 }
 .tech span {
   overflow-wrap: anywhere;
+  min-width: 0;
+}
+.tech small {
+  flex-shrink: 0;
 }
 .tech.on {
   color: var(--ink);

@@ -76,13 +76,14 @@ export function parseJson(text: string): GameState {
   const ss = (s.settings ?? {}) as Partial<Settings>;
   const techKeys = new Set(TECHS.map((t) => t.key));
   const costs = { ...DEFAULT_COSTS } as CostTable;
-  for (const k of Object.keys(DEFAULT_COSTS) as (keyof CostTable)[]) costs[k] = num(ss.costs?.[k], DEFAULT_COSTS[k]);
+  // Same limits as the rules editor.
+  for (const k of Object.keys(DEFAULT_COSTS) as (keyof CostTable)[]) costs[k] = Math.min(k === 'literacyFactor' ? 1 : 999, num(ss.costs?.[k], DEFAULT_COSTS[k], 0));
   const settings: Settings = {
     tribe: ss.tribe && ss.tribe in TRIBE_BY_KEY ? ss.tribe : d.tribe,
     owned: (Array.isArray(ss.owned) ? ss.owned : []).filter((t): t is TechKey => techKeys.has(t)),
-    cityCount: Math.round(num(ss.cityCount, Math.max(1, cities.length), 1)),
-    stars: num(ss.stars, d.stars, 0),
-    baseIncome: num(ss.baseIncome, d.baseIncome, 0),
+    cityCount: Math.min(999, Math.round(num(ss.cityCount, Math.max(1, cities.length), 1))),
+    stars: Math.min(9999, num(ss.stars, d.stars, 0)),
+    baseIncome: Math.min(9999, num(ss.baseIncome, d.baseIncome, 0)),
     allowClear: typeof ss.allowClear === 'boolean' ? ss.allowClear : d.allowClear,
     allowBurn: typeof ss.allowBurn === 'boolean' ? ss.allowBurn : d.allowBurn,
     allowGrow: typeof ss.allowGrow === 'boolean' ? ss.allowGrow : d.allowGrow,
