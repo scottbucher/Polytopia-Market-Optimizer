@@ -140,8 +140,9 @@ export function evaluateGoal(state: GameState, frontier: Frontier, goal: Goal): 
   const spread = spreadIdx(plans.length, plans.length <= 40 ? plans.length : 12);
   for (const i of spread) tryPlan(i);
   // Then every plan between the spread points either side of the best one.
-  const lo = Math.max(0, ...spread.filter((i) => i < bestIdx));
-  const hi = Math.min(plans.length - 1, ...spread.filter((i) => i > bestIdx));
+  // (At most 4 each side: each try orders a whole plan, which is slow on big empires.)
+  const lo = Math.max(0, bestIdx - 4, ...spread.filter((i) => i < bestIdx));
+  const hi = Math.min(plans.length - 1, bestIdx + 4, ...spread.filter((i) => i > bestIdx));
   for (let i = lo; i <= hi; i++) tryPlan(i);
   for (let guard = 0; guard < plans.length; guard++) {
     const at = bestIdx;

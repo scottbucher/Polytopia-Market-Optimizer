@@ -13,7 +13,9 @@ export function objectivesFor(goal: Goal): Objective[] {
   const max: Objective = { kind: 'weighted', w: 1000 };
   switch (goal.kind) {
     case 'max':
-      return [max];
+      // Cheaper objectives too: they reach layouts the income-only climb can miss, so the
+      // maximum agrees with what the other goals' searches find.
+      return [max, { kind: 'weighted', w: 10 }, { kind: 'weighted', w: 5 }];
     case 'income':
       return [{ kind: 'atleast', income: goal.income }, max];
     case 'bank':

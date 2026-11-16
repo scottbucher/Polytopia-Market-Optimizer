@@ -546,7 +546,7 @@ export function search(state: GameState, opts: SearchOptions): Frontier {
       s.climb(maxObj, rng, 10, region);
       if (s.score(maxObj).v > champ.score(maxObj).v + 1e-9) champ = s;
     }
-    climbed.push({ s: champ, fam: '#kick' });
+    if (!climbed.some((x) => x.s === champ)) climbed.push({ s: champ, fam: '#kick' });
   }
 
   // Clean up: prune every recorded layout, then peel the richest layout of each family
