@@ -1,7 +1,7 @@
 // Map editing: what each paint tool does to a tile. Pure functions on a GameState copy.
 
-import { BUILDING_BY_KIND, type BuildingKind, isBuildingKind, type Resource, type Terrain } from '../data/rules';
-import type { GameState } from './types';
+import { BUILDING_BY_KIND, type BuildingKind, isBuildingKind, LEVEL_INCOME, type Resource, type Terrain } from '../data/rules';
+import type { City, GameState } from './types';
 
 export type Tool =
   | { kind: 'look' }
@@ -101,4 +101,21 @@ export function applyTool(st: GameState, tool: Tool, i: number): GameState {
       return st;
     }
   }
+}
+
+/**
+ * Sets a city's level, or clears it with its population and income (undefined: not known).
+ * Each level makes 1★ more and the save's Workshops and Parks stay; population stays below
+ * the next level. Edits `city` in place.
+ */
+export function setCityLevel(city: City, level: number | undefined) {
+  if (level === undefined) {
+    delete city.level;
+    delete city.population;
+    delete city.income;
+    return;
+  }
+  if (city.income !== undefined) city.income = Math.max(0, city.income + (level - (city.level ?? level)) * LEVEL_INCOME);
+  city.level = level;
+  city.population = Math.min(level, city.population ?? 0);
 }

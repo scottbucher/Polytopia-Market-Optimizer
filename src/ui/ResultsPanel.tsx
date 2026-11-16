@@ -165,7 +165,7 @@ export function ResultsPanel({ state, result, frontier, currentIncome, selected,
         <>
           <h3>Other plans</h3>
           <p className="muted small">
-            {stale ? 'The map changed since this was solved. Solve again to pick from these.' : 'The cheapest layout found for each income level. Pick one to see its build order.'}
+            {stale ? 'This plan is out of date. Solve again to pick from these.' : 'The cheapest layout found for each income level. Pick one to see its build order.'}
           </p>
           <table className="frontier">
             <thead>

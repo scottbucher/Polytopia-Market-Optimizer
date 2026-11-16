@@ -1,4 +1,5 @@
-import { LEVEL_INCOME, MIN_POPULATION } from '../data/rules';
+import { MIN_POPULATION } from '../data/rules';
+import { setCityLevel } from '../model/paint';
 import type { City } from '../model/types';
 import { cityColor } from './MapView';
 import { NumberField } from './NumberField';
@@ -16,21 +17,7 @@ export function CityRow({ city: c, index: i, onChange }: { city: City; index: nu
         <select
           aria-label={`Level of ${label}`}
           value={c.level ?? ''}
-          onChange={(e) =>
-            onChange((city) => {
-              if (e.target.value === '') {
-                delete city.level;
-                delete city.population;
-                delete city.income;
-              } else {
-                const level = Number(e.target.value);
-                // Each level makes 1★ more; the save's Workshops and Parks stay.
-                if (city.income !== undefined) city.income = Math.max(0, city.income + (level - (city.level ?? level)) * LEVEL_INCOME);
-                city.level = level;
-                city.population = Math.min(city.level, city.population ?? 0);
-              }
-            })
-          }
+          onChange={(e) => onChange((city) => setCityLevel(city, e.target.value === '' ? undefined : Number(e.target.value)))}
         >
           <option value="">Level ?</option>
           {Array.from({ length: Math.max(12, c.level ?? 0) }, (_, k) => k + 1).map((l) => (

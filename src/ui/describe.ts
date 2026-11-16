@@ -108,19 +108,39 @@ export function paybackTurns(sch: Pick<Schedule, 'upgradeStars' | 'upgradeIncome
   return perTurn > 0 ? Math.max(0, Math.ceil((spend - sch.upgradeStars) / perTurn)) : null;
 }
 
-/** What changed since a plan was solved: a read of the save, your own edits, or both. */
-export interface Changes {
-  save?: boolean;
-  you?: boolean;
+/**
+ * How many changes of each kind the map has had: a read of a newer save, a read of the same
+ * save again (Refresh, which undoes your edits), and your own edits. A solve keeps the counts
+ * from when it started, so its note names only what changed after that.
+ */
+export interface ChangeCount {
+  save: number;
+  reread: number;
+  you: number;
 }
 
-/** The note on a plan that is out of date. `solvedTurn` is the game turn it was solved on. */
-export function staleNote(by: Changes, solvedTurn: number, now: number): string {
+export const NO_CHANGES: ChangeCount = { save: 0, reread: 0, you: 0 };
+
+/** What changed since a plan was solved. */
+export type Changes = Partial<Record<keyof ChangeCount, boolean>>;
+
+/** The kinds of change made since the counts were `then`. */
+export function changesSince(now: ChangeCount, then: ChangeCount): Changes {
+  return { save: now.save > then.save, reread: now.reread > then.reread, you: now.you > then.you };
+}
+
+/**
+ * The note on a plan that is out of date. `solvedTurn` is the game turn it was solved on;
+ * `deadlinePassed` when the goal's deadline has to move before you can solve again.
+ */
+export function staleNote(by: Changes, solvedTurn: number, now: number, deadlinePassed = false): string {
   let what: string;
   // The turn can go down too (an older save, or a typo fixed).
-  if (now !== solvedTurn) what = by.save ? `the save is now on turn ${now}` : `the turn is now ${now}`;
+  if (now !== solvedTurn) what = by.save || by.reread ? `the save is now on turn ${now}` : `the turn is now ${now}`;
   else if (by.save && by.you) what = 'your save changed, and so did your map, settings or goal';
   else if (by.save) what = 'your save changed since this plan was made';
+  else if (by.reread && by.you) what = 'Refresh read the save again, and you changed the map, settings or goal';
+  else if (by.reread) what = 'Refresh read the save again';
   else what = 'you changed the map, settings or goal';
-  return `Out of date: ${what}. Press Solve again to update the plan.`;
+  return `Out of date: ${what}. ${deadlinePassed ? 'Pick a later turn, then press Solve again.' : 'Press Solve again to update the plan.'}`;
 }

@@ -80,6 +80,15 @@ export function resolveGoal(p: GoalPrefs, now: number, marketIncome: number): Re
   return { goal, by, problem };
 }
 
+/**
+ * The goal with a deadline you haven't set fixed to the turn it stands for now: once you
+ * solve with it, it stays put instead of moving with the next save.
+ */
+export function pinDeadline(p: GoalPrefs, now: number): GoalPrefs {
+  if (p.kind === 'max' || p[p.kind].by !== undefined) return p;
+  return { ...p, [p.kind]: { ...p[p.kind], by: now + DEFAULT_TURNS[p.kind] } };
+}
+
 /** "(12 turns from now)" for a deadline. */
 export function turnsFromNow(by: number, now: number): string {
   const n = by - now;

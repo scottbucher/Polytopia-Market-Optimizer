@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BUILDING_KINDS, BUILDING_NAMES, type BuildingKind, type CostTable, DEFAULT_COSTS, TRIBE_BY_KEY, TRIBES, type Terrain, type TribeKey } from './data/rules';
 import { blankState, exampleState } from './model/defaults';
-import { type GoalKind, type GoalPrefs, loadGoalPrefs, MAX_TURN, resolveGoal, saveGoalPrefs } from './model/goalPrefs';
+import { type GoalKind, type GoalPrefs, loadGoalPrefs, MAX_TURN, pinDeadline, resolveGoal, saveGoalPrefs } from './model/goalPrefs';
 import { download, loadLocal, mapJson, parseJson, saveLocal } from './model/io';
 import { applyTool, type Tool } from './model/paint';
 import { readPref, writePref } from './model/prefs';
@@ -13,7 +13,7 @@ import type { GoalResult } from './solver/goals';
 import { income } from './solver/income';
 import { techPrice } from './solver/options';
 import { layoutAfter } from './solver/schedule';
-import { type Changes, describeTile, plural, staleNote } from './ui/describe';
+import { type ChangeCount, changesSince, describeTile, NO_CHANGES, plural, staleNote } from './ui/describe';
 import { type Backdrop, GAME_VIEW, isGameView, loadView, MapView, type Overlay, saveView, type View } from './ui/MapView';
 import { CityRow } from './ui/CityRow';
 import { GoalPicker, SolveHint } from './ui/GoalPicker';
@@ -23,7 +23,7 @@ import { ScreenshotPanel } from './ui/ScreenshotPanel';
 import { TechPicker } from './ui/TechPicker';
 import { useOptimizer } from './ui/useOptimizer';
 import { LoadSave, SyncBar } from './ui/LoadSave';
-import { loadNotice, makeLink, mergeRefresh, routeSave } from './ui/saveSync';
+import { changed, loadNotice, makeLink, mergeRefresh, routeSave } from './ui/saveSync';
 import { type SaveRead, type SyncWhy, useSaveSync } from './ui/useSaveSync';
 
 const TERRAINS: [Terrain, string][] = [
@@ -58,9 +58,10 @@ export default function App() {
   // and loading a newer save (deadlines are game turns).
   const [goalPrefs, setGoalPrefs] = useState<GoalPrefs>(loadGoalPrefs);
   useEffect(() => saveGoalPrefs(goalPrefs), [goalPrefs]);
-  // What changed the map since the plan was solved: said on the plan once it is out of date.
-  const [changedBy, setChangedBy] = useState<Changes>({});
-  const touch = (by: keyof Changes) => setChangedBy((c) => (c[by] ? c : { ...c, [by]: true }));
+  // Counts of what changed the map: a plan keeps them from when it was solved, to say what
+  // made it out of date.
+  const [changes, setChanges] = useState<ChangeCount>(NO_CHANGES);
+  const touch = (by: keyof ChangeCount) => setChanges((c) => ({ ...c, [by]: c[by] + 1 }));
   const setGoalKind = (kind: GoalKind) => {
     touch('you');
     setGoalPrefs((p) => ({ ...p, kind }));
@@ -111,10 +112,6 @@ export default function App() {
   // What a solve depends on: the map, settings and the goal.
   const stateKey = useMemo(() => JSON.stringify([state, goal]), [state, goal]);
   const stale = opt.solved !== null && opt.solved.stateKey !== stateKey;
-  // Back in step (solved again, or the change undone): start counting changes afresh.
-  useEffect(() => {
-    if (!stale && (changedBy.save || changedBy.you)) setChangedBy({});
-  }, [stale, changedBy]);
   const solvedIncome = useMemo(() => (opt.solved ? income(currentLayout(opt.solved.state), opt.solved.state.width, opt.solved.state.height).total : 0), [opt.solved]);
 
   /** An edit of yours (painting, settings, cities, turn). */
@@ -148,9 +145,9 @@ export default function App() {
    * A fresh read of the game on screen (Refresh, auto-update): takes the map from the save
    * but keeps the tool, view, screenshot, goal and the plan (which goes stale), with no undo or banner.
    */
-  const refreshState = (fn: (prev: GameState) => GameState, cities: City[]) => {
+  const refreshState = (fn: (prev: GameState) => GameState, cities: City[], by: 'save' | 'reread') => {
     const before = state.cities;
-    touch('save');
+    touch(by);
     setState((prev) => fn(prev));
     setLastPaint(null);
     // A captured or lost city shifts the others: a territory tool for another city stops.
@@ -195,7 +192,9 @@ export default function App() {
     const link = sync.link!;
     try {
       const r = toGameState(save, playerId, read.stamp.name);
-      refreshState((prev) => mergeRefresh(prev, link.incomeEstimate, r.state), r.state.cities);
+      // The same file read again only undoes your edits: the note doesn't call that a change to the save.
+      const fresh = changed({ name: link.fileName, lastModified: link.lastModified, size: link.size }, read.stamp);
+      refreshState((prev) => mergeRefresh(prev, link.incomeEstimate, r.state), r.state.cities, fresh ? 'save' : 'reread');
       sync.linked(makeLink(read.kind, read.stamp, save, playerId, r.incomeEstimate), read);
       // The banners were about the read before this one.
       setNotice(null);
@@ -261,6 +260,12 @@ export default function App() {
   const canSolve = !unsupported && state.cities.length > 0 && mappedTiles > 0;
   // Both Solve buttons (the plan panel's and the save bar's) run only when this is true.
   const canRun = canSolve && !busy && goalProblem === null;
+  const runSolve = () => {
+    if (!canRun) return;
+    // A deadline you didn't set stays on the turn this plan was made for.
+    setGoalPrefs((p) => pinDeadline(p, now));
+    opt.solve(state, goal, stateKey, changes);
+  };
   const painted = lastPaint ? describeTile(state, lastPaint.tile, overlay) : null;
   const [coarse] = useState(() => typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches);
 
@@ -314,7 +319,7 @@ export default function App() {
         </div>
       </header>
 
-      <SyncBar sync={sync} planStale={stale} onSolve={canRun ? () => opt.solve(state, goal, stateKey) : null} />
+      <SyncBar sync={sync} planStale={stale} onSolve={canRun ? runSolve : null} />
       {pendingSave && (
         <div className="banner" role="status">
           {pendingSave.note ? `${pendingSave.note} ` : ''}This save has more than one human player. Who are you?
@@ -585,7 +590,7 @@ export default function App() {
                 onChange={(v) => setSettings({ cityUpgrades: v })}
               />
             </fieldset>
-            <button type="button" className="primary" onClick={() => canRun && opt.solve(state, goal, stateKey)} aria-disabled={busy || undefined} disabled={!canSolve || goalProblem !== null}>
+            <button type="button" className="primary" onClick={runSolve} aria-disabled={busy || undefined} disabled={!canSolve || goalProblem !== null}>
               {busy ? 'Working…' : opt.solved ? 'Solve again' : 'Find the best layout'}
             </button>
             <SolveHint cities={state.cities.length} mappedTiles={mappedTiles} />
@@ -614,7 +619,7 @@ export default function App() {
                   if (wrap && r && (r.bottom < 0 || r.top > window.innerHeight)) wrap.scrollIntoView({ block: 'center', behavior: 'smooth' });
                 }}
                 turn={opt.solved.turn}
-                staleNote={stale ? staleNote(changedBy, opt.solved.turn, now) : null}
+                staleNote={stale ? staleNote(changesSince(changes, opt.solved.changes), opt.solved.turn, now, goalProblem !== null) : null}
                 loading={opt.busy !== null}
               />
             </section>

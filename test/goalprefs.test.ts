@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { defaultGoalPrefs, type GoalPrefs, parseGoalPrefs, resolveGoal, turnsFromNow } from '../src/model/goalPrefs';
-import { turnNow } from '../src/model/types';
+import { defaultGoalPrefs, type GoalPrefs, parseGoalPrefs, pinDeadline, resolveGoal, turnsFromNow } from '../src/model/goalPrefs';
+import { type City, turnNow } from '../src/model/types';
 import { mapJson, parseJson } from '../src/model/io';
+import { setCityLevel } from '../src/model/paint';
 import { evaluateGoal } from '../src/solver/goals';
 import { search } from '../src/solver/search';
 import { makeState, withBuildings } from './helpers';
@@ -42,6 +43,24 @@ describe('deadlines are game turns', () => {
     const p: GoalPrefs = { ...defaultGoalPrefs(), kind: 'income' };
     expect(resolveGoal(p, 18, 24)).toEqual({ goal: { kind: 'income', income: 28, turns: 10 }, by: 28, problem: null });
     expect(resolveGoal({ ...p, kind: 'bank' }, 5, 0).by).toBe(13);
+  });
+
+  it('a deadline you never set stays put once you solve with it', () => {
+    const p: GoalPrefs = { ...defaultGoalPrefs(), kind: 'bank', bank: { stars: 50 } };
+    const pinned = pinDeadline(p, 18);
+    expect(pinned.bank).toEqual({ stars: 50, by: 26 });
+    // The same goal as before, so the plan isn't out of date.
+    expect(resolveGoal(pinned, 18, 0)).toEqual(resolveGoal(p, 18, 0));
+    // A later save keeps it.
+    expect(resolveGoal(pinned, 21, 0).by).toBe(26);
+    // Only the goal you solved with; the others still follow the game.
+    expect(pinned.income).toEqual({});
+    expect(pinned['best-by']).toEqual({});
+    // A deadline you set, or no deadline, is left as it is.
+    expect(pinDeadline(pinned, 20)).toBe(pinned);
+    const max = { ...p, kind: 'max' as const };
+    expect(pinDeadline(max, 18)).toBe(max);
+    expect(pinDeadline({ ...defaultGoalPrefs(), kind: 'best-by' }, 4)['best-by']).toEqual({ by: 19 });
   });
 
   it('helper text', () => {
@@ -114,5 +133,26 @@ describe('saved maps keep the turn and city levels', () => {
     s.cities[0].income = 5;
     s.cities[0].level = 'big';
     expect(parseJson(JSON.stringify(s)).cities[0]).toEqual({ name: 'City 1', x: 1, y: 1 });
+  });
+
+  it('changing a level changes the income by 1★ a level and keeps population below the next level', () => {
+    const c = { name: 'A', x: 0, y: 0, level: 4, population: 3, income: 7 };
+    setCityLevel(c, 6);
+    expect(c).toEqual({ name: 'A', x: 0, y: 0, level: 6, population: 3, income: 9 });
+    setCityLevel(c, 2);
+    expect(c).toMatchObject({ level: 2, population: 2, income: 5 });
+    setCityLevel(c, 1);
+    expect(c).toMatchObject({ level: 1, population: 1, income: 4 });
+    // Never below zero; population below zero stays.
+    const low = { name: 'B', x: 0, y: 0, level: 5, population: -2, income: 1 };
+    setCityLevel(low, 1);
+    expect(low).toMatchObject({ level: 1, population: -2, income: 0 });
+    // A hand-drawn city has no income to change, and starts with no population.
+    const drawn: City = { name: 'C', x: 0, y: 0 };
+    setCityLevel(drawn, 3);
+    expect(drawn).toEqual({ name: 'C', x: 0, y: 0, level: 3, population: 0 });
+    // Not known: the level goes with its population and income.
+    setCityLevel(c, undefined);
+    expect(c).toEqual({ name: 'A', x: 0, y: 0 });
   });
 });

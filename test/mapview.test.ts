@@ -90,6 +90,25 @@ describe('map marks', () => {
       }
   });
 
+  it('an enemy beside a building covers neither the building nor its step number', () => {
+    const st = blankState(5, 5);
+    for (const kind of BUILDING_KINDS) {
+      st.tiles[12].improvement = kind;
+      for (const n of [undefined, 1, 9, 28, 105]) {
+        const overlay: Overlay = { layout: Array(25).fill(null), steps: new Map(n ? [[12, [n]]] : []), removed: new Set(), marketIncome: new Map() };
+        overlay.layout[12] = kind;
+        for (const o of [overlay, ...(n ? [] : [null])]) {
+          const e = enemySpot(st.tiles[12], 12, o, cx, cy);
+          expect(e.small).toBe(true);
+          const r = enemyR(e.small);
+          const circle: Rect = [e.x - r, e.y - r, e.x + r, e.y + r];
+          expect(overlapArea(circle, badgeRect(kind, cx, cy))).toBe(0);
+          if (n) expect(overlapArea(circle, stepRect(cx, cy, n))).toBe(0);
+        }
+      }
+    }
+  });
+
   it('city levels use whichever text colour has more contrast, at least 4.5:1', () => {
     expect(inkOn('#37b24d')).toBe('#000000');
     expect(inkOn('#ae3ec9')).toBe('#ffffff');
