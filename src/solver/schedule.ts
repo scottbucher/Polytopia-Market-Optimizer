@@ -99,8 +99,12 @@ const TECH_POOL = 12;
 
 const tilesOf = (b: Action[]) => b.filter((x) => x.kind !== 'tech').map((x) => (x as { tile: number }).tile);
 
-/** Build order: list of bundles, each a list of actions in a valid order. */
-export function orderActions(state: GameState, plan: Plan): Order {
+/**
+ * Build order: list of bundles, each a list of actions in a valid order.
+ * `fresh` (for tests) works out each bundle's population from scratch instead of from
+ * the cached population and the draft it grew from: the order must come out the same.
+ */
+export function orderActions(state: GameState, plan: Plan, { fresh = false } = {}): Order {
   const acts = planActions(state, plan);
   const W = state.width;
   const nb = neighborTable(W, state.height);
@@ -239,7 +243,8 @@ export function orderActions(state: GameState, plan: Plan): Order {
     if (growth) {
       // A level-up's stars make the bundle cheaper; its stars per turn count as income.
       gains.clear();
-      if (base) {
+      if (fresh) popGain(state, nb, getNow, get, d.over.keys(), gains);
+      else if (base) {
         for (const [c, n] of base.gains) gains.set(c, n);
         popGain(state, nb, getter(base.d), get, d.over.keys(), gains);
       } else popGain(state, nb, getNow, get, d.over.keys(), gains, popNow);

@@ -12,6 +12,8 @@ export interface Solved extends OptimizeResult {
   runId: number;
   /** The game turn it was solved on: a refresh can move the game on before you solve again. */
   turn: number;
+  /** The map it was solved for: an out-of-date plan still names its cities and tiles as they were. */
+  state: GameState;
 }
 
 /** Runs the optimizer in a worker. One job at a time: a new one cancels the last. */
@@ -55,7 +57,7 @@ export function useOptimizer(onError: (msg: string) => void) {
     setPicked(null);
     const turn = turnNow(state);
     run({ type: 'solve', id: ++reqId.current, state, goal }, (r) => {
-      if (r.type === 'solve') setSolved({ ...r.result, stateKey, runId: r.id, turn });
+      if (r.type === 'solve') setSolved({ ...r.result, stateKey, runId: r.id, turn, state });
     });
   };
 

@@ -71,7 +71,7 @@ City growth:
 - A city at level L levels up when its population reaches L + 1; extra population carries over. Each level adds 1★ per turn by itself.
 - The economic reward at each level: level 2 Workshop (+1★ per turn, instead of an Explorer), level 3 Resources (+5★ at once, instead of a City wall), level 4 Population growth (+3 population, which can level the city again, instead of Border growth), level 5 and up Park (+1★ per turn, instead of a super unit).
 - A city's income is its level, plus 1 per Workshop and Park, plus 1 for the capital. In a save, a city's `population` is the progress toward the next level and `production` is 1 + its Workshops and Parks.
-- Destroying a building takes its population away again (a hut next to a sawmill also takes the sawmill's level). A city never loses a level: its population goes below zero (red pips in the game), and each point below zero costs 1★ per turn of that city's income, down to nothing. The planner counts this in the build order and in "Income per turn" from a save.
+- Destroying a building takes its population away again (a hut next to a sawmill also takes the sawmill's level). A city never loses a level: its population goes below zero (red pips in the game), and each point below zero costs 1★ per turn of that city's income, down to nothing (on a hand-drawn map, where the planner doesn't know a city's Workshops and Parks, down to its level). The planner counts this in the build order and in "Income per turn" from a save.
 
 Population numbers come from the game's logic data. The level rewards are not in that data: they come from the game itself, checked against a real save (each city's stars and population pips, and the +★ total). The rules for destroying come from the [wiki](https://polytopia.fandom.com/wiki/Population) and haven't been checked against a save yet.
 
@@ -90,7 +90,7 @@ Not modelled:
 
 A small empire takes a second or two and a mid-sized one a few seconds. Very large ones (10 or more cities that share borders) can take half a minute or more.
 
-Tests check the optimizer against exhaustive search on small maps. On single cities it is exact; across city borders the local search can, rarely, miss a layout that needs several buildings moved at once (the tests allow 2 misses in 18 random two-city maps).
+Tests check the optimizer against exhaustive search on small maps. On single cities it is exact; across city borders the local search can, rarely, miss a layout that needs several buildings moved at once (the tests compare at least 15 of 24 random two-city maps and allow 2 misses).
 
 Game rules live in one table in `src/data/rules.ts` (buildings, terrain actions, techs, tribes), so a balance patch is usually a one-line change there or in **Rules and costs**.
 

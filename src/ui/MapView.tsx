@@ -625,12 +625,10 @@ export function MapView({ state, view, overlay, highlight, onPaint, onHover, bac
         // The step that finishes the tile (its building), with earlier ones listed in the tooltip.
         const last = steps?.[steps.length - 1];
         const r = last === undefined ? null : stepRect(cx, cy, last);
-        // An enemy on an empty tile stands in the middle; next to a building it takes the gap.
-        const drawn = drawnKind(t, i, overlay ?? null) !== null;
-        const [ex, ey] = !drawn ? [cx, cy - 1] : r ? [cx - 23, cy - 1] : [cx + 23, cy - 1];
+        const e = enemy ? enemySpot(t, i, overlay ?? null, cx, cy) : null;
         return (
           <g key={i}>
-            {enemy && <Enemy cx={ex} cy={ey} small={drawn} />}
+            {e && <Enemy cx={e.x} cy={e.y} small={e.small} />}
             {r && (
               <g className="stepnum">
                 <title>{`Step${steps!.length > 1 ? 's' : ''} ${steps!.join(', ')}`}</title>
@@ -647,31 +645,15 @@ export function MapView({ state, view, overlay, highlight, onPaint, onHover, bac
   );
 
   // City names go under the city, or the nearest spot that hides no building, step or other name.
-  const cityNames = useMemo(() => {
-    const busy = occupiedRects(state, overlay ?? null, centers, enemies);
-    return state.cities.map((c, ci) => {
-      const i = c.y * w + c.x;
-      if (c.x < 0 || c.y < 0 || c.x >= w || c.y >= h) return null;
-      const [cx, cy] = centers[i];
-      const name = c.name.trim() || `City ${ci + 1}`;
-      const { total, below } = labelSize(name, c.level);
-      let best: Rect = [0, 0, 0, 0];
-      let bestAt: [number, number] = LABEL_SPOTS[0];
-      let bestHit = Infinity;
-      for (const [dx, dy] of LABEL_SPOTS) {
-        const r: Rect = [cx + dx - total / 2, cy + dy - 9, cx + dx + total / 2, cy + dy + 9 + below];
-        // Hiding anything costs far more than moving away; markets and planned buildings most.
-        const hit = busy.reduce((a, [b, weight]) => a + overlap(r, b) * weight, 0) + Math.abs(dx) + Math.abs(dy - LABEL_SPOTS[0][1]);
-        if (hit < bestHit) {
-          bestHit = hit;
-          best = r;
-          bestAt = [dx, dy];
-        }
-      }
-      busy.push([best, 400]);
-      return <CityLabel key={ci} cx={cx + bestAt[0]} cy={cy + bestAt[1]} name={name} level={c.level} population={c.population} color={cityColor(state.tiles[i]?.city ?? ci)} />;
-    });
-  }, [state, overlay, centers, w, h, enemies]);
+  const cityNames = useMemo(
+    () =>
+      placeLabels(state, overlay ?? null, centers, enemies).map((p, ci) => {
+        if (!p) return null;
+        const c = state.cities[ci];
+        return <CityLabel key={ci} cx={p.x} cy={p.y} name={p.name} level={c.level} population={c.population} color={cityColor(state.tiles[c.y * w + c.x]?.city ?? ci)} />;
+      }),
+    [state, overlay, centers, w, enemies],
+  );
 
   const hasEnemy = enemies.size > 0;
   const hasOther = useMemo(() => state.tiles.some((t) => t.improvement === 'other'), [state.tiles]);
@@ -880,10 +862,10 @@ export const badgeRect = (kind: BuildingKind, cx: number, cy: number): Rect => {
   return [cx - bw / 2, cy - bh / 2 - 1, cx + bw / 2, cy + bh / 2 - 1];
 };
 
-/** The step number's chip: in the gap right of the tile's building, just touching it. */
+/** The step number's chip: in the gap right of the tile's building, touching the widest badge. */
 export function stepRect(cx: number, cy: number, n: number): Rect {
   const cw = Math.max(16, 7 + String(n).length * 6.5);
-  return [cx + 13, cy - 7.5, cx + 13 + cw, cy + 5.5];
+  return [cx + 16, cy - 7.5, cx + 16 + cw, cy + 5.5];
 }
 
 function Badge({ kind, cx, cy, planned, gone, out, income }: { kind: BuildingKind; cx: number; cy: number; planned: boolean; gone?: boolean; out?: boolean; income?: number }) {
@@ -924,7 +906,17 @@ function Removed({ cx, cy, small }: { cx: number; cy: number; small: boolean }) 
 }
 
 /** Radius of an enemy marker: full size on an empty tile, smaller in the gap beside a building. */
-const enemyR = (small: boolean) => (small ? 6.5 : 9);
+export const enemyR = (small: boolean) => (small ? 6.5 : 9);
+
+/**
+ * Where an enemy marker goes: in the middle of an empty tile; next to a building it takes
+ * the gap on the right, or the left one when a step number is there.
+ */
+export function enemySpot(t: GameState['tiles'][number], i: number, overlay: Overlay | null, cx: number, cy: number) {
+  const drawn = drawnKind(t, i, overlay) !== null;
+  const stepped = !!overlay?.steps.get(i)?.length;
+  return { x: !drawn ? cx : stepped ? cx - 23 : cx + 23, y: cy - 1, small: drawn };
+}
 
 function Enemy({ cx, cy, small }: { cx: number; cy: number; small: boolean }) {
   return (
@@ -967,11 +959,67 @@ function City({ cx, cy, color }: { cx: number; cy: number; color: string }) {
 }
 
 export type Rect = [number, number, number, number];
+const UNDER: [number, number] = [0, 21];
+const SPOT_X = [-96, 96];
+const SPOT_Y = [-64, 64];
 /** Where a city's name may go, relative to the city tile: under it first, else anywhere up to about two tiles away. */
 const LABEL_SPOTS: [number, number][] = [
-  [0, 21],
-  ...Array.from({ length: 17 }, (_, a) => -64 + a * 8).flatMap((dy) => Array.from({ length: 13 }, (_, b) => -96 + b * 16).map((dx): [number, number] => [dx, dy])),
+  UNDER,
+  ...Array.from({ length: 33 }, (_, a) => SPOT_Y[0] + a * 4).flatMap((dy) => Array.from({ length: 25 }, (_, b) => SPOT_X[0] + b * 8).map((dx): [number, number] => [dx, dy])),
 ];
+/**
+ * What putting a name away from under its city costs: its distance from the city, growing
+ * faster the further it goes, so it stays by its city, and a little pull to the row under it.
+ */
+const spotCost = (dx: number, dy: number) => {
+  const d = Math.hypot(dx, dy);
+  return 4 * d + (d * d) / 4 + Math.abs(dy - UNDER[1]);
+};
+
+/** A city's name on the map, and where it goes. */
+export interface PlacedLabel {
+  name: string;
+  /** Centre of the name. */
+  x: number;
+  y: number;
+  /** The space it takes, population pips included. */
+  rect: Rect;
+}
+
+/**
+ * Puts each city's name under the city, or on the nearest spot that hides no building,
+ * step, enemy or other name (markets and planned buildings least of all). Null for a city
+ * off the map.
+ */
+export function placeLabels(state: GameState, overlay: Overlay | null, centers: [number, number][], enemies: Set<number>): (PlacedLabel | null)[] {
+  const busy = occupiedRects(state, overlay, centers, enemies);
+  return state.cities.map((c, ci) => {
+    if (c.x < 0 || c.y < 0 || c.x >= state.width || c.y >= state.height) return null;
+    const [cx, cy] = centers[c.y * state.width + c.x];
+    const name = c.name.trim() || `City ${ci + 1}`;
+    const { total, below } = labelSize(name, c.level);
+    // Only what lies within reach of the spots can be hidden.
+    const reach: Rect = [cx + SPOT_X[0] - total / 2, cy + SPOT_Y[0] - 9, cx + SPOT_X[1] + total / 2, cy + SPOT_Y[1] + 9 + below];
+    const near = busy.filter(([b]) => overlap(reach, b) > 0);
+    let best: Rect = [0, 0, 0, 0];
+    let bestAt = UNDER;
+    let bestHit = Infinity;
+    for (const [dx, dy] of LABEL_SPOTS) {
+      const r: Rect = [cx + dx - total / 2, cy + dy - 9, cx + dx + total / 2, cy + dy + 9 + below];
+      // Hiding any of anything costs more than going as far as the spots reach; markets and
+      // planned buildings most.
+      const hit = 100 * near.reduce((a, [b, weight]) => a + overlap(r, b) * weight, 0) + spotCost(dx, dy);
+      if (hit < bestHit) {
+        bestHit = hit;
+        best = r;
+        bestAt = [dx, dy];
+      }
+    }
+    busy.push([best, 400]);
+    return { name, x: cx + bestAt[0], y: cy + bestAt[1], rect: best };
+  });
+}
+
 const overlap = (a: Rect, b: Rect) => Math.max(0, Math.min(a[2], b[2]) - Math.max(a[0], b[0])) * Math.max(0, Math.min(a[3], b[3]) - Math.max(a[1], b[1]));
 
 /** What's drawn on a tile: a city, a building badge (planned, kept or removed), another building, or nothing. */
@@ -995,7 +1043,11 @@ function occupiedRects(state: GameState, overlay: Overlay | null, centers: [numb
     else if (kind) out.push([badgeRect(kind, cx, cy), kind === 'market' || (overlay && overlay.layout[i] !== t.improvement) ? 1000 : 400]);
     const steps = overlay?.steps.get(i);
     if (steps?.length) out.push([stepRect(cx, cy, steps[steps.length - 1]), 1000]);
-    if (enemies.has(i)) out.push([[cx - 30, cy - 10, cx + 30, cy + 8], 200]);
+    if (enemies.has(i)) {
+      const e = enemySpot(t, i, overlay, cx, cy);
+      const r = enemyR(e.small);
+      out.push([[e.x - r, e.y - r, e.x + r, e.y + r], 400]);
+    }
   });
   return out;
 }
@@ -1008,7 +1060,7 @@ function labelSize(name: string, level?: number) {
   return { lv, nw, lw, total: nw + lw, below: lv ? 7 : 0 };
 }
 
-const DARK_INK = '#1f2328';
+const DARK_INK = '#000000';
 
 /** WCAG relative luminance of a #rrggbb colour. */
 function luminance(hex: string) {
@@ -1018,21 +1070,40 @@ function luminance(hex: string) {
 }
 const contrast = (a: number, b: number) => (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
 
+/** WCAG contrast ratio of two #rrggbb colours. */
+export const contrastOf = (a: string, b: string) => contrast(luminance(a), luminance(b));
+
 /** Black or white text, whichever has more contrast (WCAG) on a city colour. */
 export function inkOn(hex: string) {
   const bg = luminance(hex);
   return contrast(bg, 1) >= contrast(bg, luminance(DARK_INK)) ? '#ffffff' : DARK_INK;
 }
 
+/**
+ * Population pips under a city's name, as in the game: level + 1 to grow, `filled` of them
+ * filled; below zero, one red pip per missing population instead. At most 12 drawn.
+ */
+export function pipsOf(level: number | undefined, population = 0): { count: number; filled: number; below: number } {
+  if (level === undefined || level < 1) return { count: 0, filled: 0, below: 0 };
+  const below = Math.min(12, Math.max(0, -population));
+  const count = Math.max(below, Math.min(level + 1, 12));
+  return { count, filled: clamp(population, 0, count), below };
+}
+
+/** The tooltip of a city's name. */
+export function cityLabelTitle(name: string, level?: number, population?: number): string {
+  if (level === undefined || level < 1) return name;
+  const pop = population === undefined ? '' : population < 0 ? `, population ${population} (below zero)` : `, population ${population} of ${level + 1}`;
+  return `${name}, level ${level}${pop}`;
+}
+
 function CityLabel({ cx, cy, name, level, population, color }: { cx: number; cy: number; name: string; level?: number; population?: number; color: string }) {
   const { lv, nw, lw, total } = labelSize(name, level);
   const x0 = cx - total / 2;
-  // Population pips under the label, as in the game: level + 1 to grow (at most 12 drawn).
-  const pips = lv ? Math.min(level! + 1, 12) : 0;
-  const filled = clamp(population ?? 0, 0, pips);
+  const { count: pips, filled, below } = pipsOf(level, population);
   return (
     <g className="citylabel">
-      <title>{`${name}${lv ? `, level ${level}` : ''}${population !== undefined && lv ? `, population ${population} of ${level! + 1}` : ''}`}</title>
+      <title>{cityLabelTitle(name, level, population)}</title>
       <rect x={x0} y={cy - 9} width={total} height={18} rx={9} className="pill" stroke={color} />
       {lv && <path d={`M${x0 + nw},${cy - 9}h${lw - 9}a9,9 0 0 1 0,18h${-(lw - 9)}z`} fill={color} />}
       <text x={x0 + nw / 2} y={cy + 4.2} className="nm">
@@ -1045,7 +1116,16 @@ function CityLabel({ cx, cy, name, level, population, color }: { cx: number; cy:
       )}
       {pips > 0 &&
         Array.from({ length: pips }, (_, k) => (
-          <rect key={k} x={cx - (pips * 8) / 2 + k * 8 + 0.5} y={cy + 10.5} width={7} height={5} rx={1.5} className={k < filled ? 'pip on' : 'pip'} fill={k < filled ? color : undefined} />
+          <rect
+            key={k}
+            x={cx - (pips * 8) / 2 + k * 8 + 0.5}
+            y={cy + 10.5}
+            width={7}
+            height={5}
+            rx={1.5}
+            className={k < below ? 'pip neg' : k < filled ? 'pip on' : 'pip'}
+            fill={k < filled ? color : undefined}
+          />
         ))}
     </g>
   );

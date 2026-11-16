@@ -1,5 +1,5 @@
 import { useId, useState } from 'react';
-import { type GoalKind, type GoalPrefs, MAX_TURN, turnsFromNow } from '../model/goalPrefs';
+import { type GoalKind, type GoalPrefs, MAX_TURN, pastTurn, turnsFromNow } from '../model/goalPrefs';
 import type { Goal } from '../model/types';
 import { NumberField } from './NumberField';
 
@@ -82,14 +82,12 @@ function GoalOpt({ checked, onSelect, title, desc, children }: { checked: boolea
   );
 }
 
-/** A deadline that isn't after this turn, said the same way as the goal's own check. */
-const pastTurn = (by: number, now: number) => `Turn ${by} ${by === now ? 'is this turn' : 'has passed'} (it's turn ${now} now). Pick a later turn.`;
-
 /** "by turn [30]" with how far away that is, or why it can't be used. Follows the number while you type. */
 function Deadline({ by, now, problem, onChange }: { by: number; now: number; problem: string | null; onChange: (v: number) => void }) {
   const id = useId();
   const [typed, setTyped] = useState<number | null>(null);
   const shown = typed === null ? by : Math.round(typed);
+  // Said the same way as the goal's own check.
   const issue = typed === null ? problem : shown <= now ? pastTurn(shown, now) : null;
   return (
     <>

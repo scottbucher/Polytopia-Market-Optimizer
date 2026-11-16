@@ -6,8 +6,6 @@
 import { readPref, writePref } from './prefs';
 import type { Goal } from './types';
 
-export { turnNow } from './types';
-
 export type GoalKind = Goal['kind'];
 
 export interface GoalPrefs {
@@ -51,8 +49,6 @@ export function parseGoalPrefs(saved: unknown): GoalPrefs {
   };
 }
 
-export const goalPrefsJson = (p: GoalPrefs) => JSON.stringify(p);
-
 export const loadGoalPrefs = (): GoalPrefs => parseGoalPrefs(readPref<unknown>(KEY, null));
 
 export const saveGoalPrefs = (p: GoalPrefs) => writePref(KEY, p);
@@ -66,12 +62,15 @@ export interface ResolvedGoal {
   problem: string | null;
 }
 
+/** Why a deadline that isn't after this turn can't be used. */
+export const pastTurn = (by: number, now: number) => `Turn ${by} ${by === now ? 'is this turn' : 'has passed'} (it's turn ${now} now). Pick a later turn.`;
+
 /** The goal for the solver, given the game's turn now and your market income now. */
 export function resolveGoal(p: GoalPrefs, now: number, marketIncome: number): ResolvedGoal {
   if (p.kind === 'max') return { goal: { kind: 'max' }, by: null, problem: null };
   const by = p[p.kind].by ?? now + DEFAULT_TURNS[p.kind];
   const turns = Math.max(0, by - now);
-  const problem = by <= now ? `Turn ${by} ${by === now ? 'is this turn' : 'has passed'} (it's turn ${now} now). Pick a later turn.` : null;
+  const problem = by <= now ? pastTurn(by, now) : null;
   const goal: Goal =
     p.kind === 'income'
       ? { kind: 'income', income: p.income.income ?? Math.max(1, marketIncome + 4), turns }

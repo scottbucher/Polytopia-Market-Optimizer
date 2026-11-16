@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BUILDING_KINDS, BUILDING_NAMES, type BuildingKind, type CostTable, DEFAULT_COSTS, TRIBE_BY_KEY, TRIBES, type Terrain, type TribeKey } from './data/rules';
 import { blankState, exampleState } from './model/defaults';
-import { type GoalKind, type GoalPrefs, loadGoalPrefs, MAX_TURN, resolveGoal, saveGoalPrefs, turnNow } from './model/goalPrefs';
+import { type GoalKind, type GoalPrefs, loadGoalPrefs, MAX_TURN, resolveGoal, saveGoalPrefs } from './model/goalPrefs';
 import { download, loadLocal, mapJson, parseJson, saveLocal } from './model/io';
 import { applyTool, type Tool } from './model/paint';
 import { readPref, writePref } from './model/prefs';
-import type { GameState } from './model/types';
+import { type City, type GameState, turnNow } from './model/types';
 import type { RawSave } from './parse/stateFile';
 import { humanPlayers, toGameState } from './parse/toGameState';
 import { currentLayout } from './solver/exact';
@@ -13,7 +13,7 @@ import type { GoalResult } from './solver/goals';
 import { income } from './solver/income';
 import { techPrice } from './solver/options';
 import { layoutAfter } from './solver/schedule';
-import { plural, where } from './ui/describe';
+import { type Changes, describeTile, plural, staleNote } from './ui/describe';
 import { type Backdrop, GAME_VIEW, isGameView, loadView, MapView, type Overlay, saveView, type View } from './ui/MapView';
 import { CityRow } from './ui/CityRow';
 import { GoalPicker, SolveHint } from './ui/GoalPicker';
@@ -58,8 +58,17 @@ export default function App() {
   // and loading a newer save (deadlines are game turns).
   const [goalPrefs, setGoalPrefs] = useState<GoalPrefs>(loadGoalPrefs);
   useEffect(() => saveGoalPrefs(goalPrefs), [goalPrefs]);
-  const setGoalKind = (kind: GoalKind) => setGoalPrefs((p) => ({ ...p, kind }));
-  const editGoal = <K extends Exclude<GoalKind, 'max'>>(kind: K, patch: Partial<GoalPrefs[K]>) => setGoalPrefs((p) => ({ ...p, [kind]: { ...p[kind], ...patch } }));
+  // What changed the map since the plan was solved: said on the plan once it is out of date.
+  const [changedBy, setChangedBy] = useState<Changes>({});
+  const touch = (by: keyof Changes) => setChangedBy((c) => (c[by] ? c : { ...c, [by]: true }));
+  const setGoalKind = (kind: GoalKind) => {
+    touch('you');
+    setGoalPrefs((p) => ({ ...p, kind }));
+  };
+  const editGoal = <K extends Exclude<GoalKind, 'max'>>(kind: K, patch: Partial<GoalPrefs[K]>) => {
+    touch('you');
+    setGoalPrefs((p) => ({ ...p, [kind]: { ...p[kind], ...patch } }));
+  };
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(initial.firstRun ? FIRST_RUN : null);
   // The map a replace (new, example, opened file) threw away, for one step of undo.
@@ -102,8 +111,17 @@ export default function App() {
   // What a solve depends on: the map, settings and the goal.
   const stateKey = useMemo(() => JSON.stringify([state, goal]), [state, goal]);
   const stale = opt.solved !== null && opt.solved.stateKey !== stateKey;
+  // Back in step (solved again, or the change undone): start counting changes afresh.
+  useEffect(() => {
+    if (!stale && (changedBy.save || changedBy.you)) setChangedBy({});
+  }, [stale, changedBy]);
+  const solvedIncome = useMemo(() => (opt.solved ? income(currentLayout(opt.solved.state), opt.solved.state.width, opt.solved.state.height).total : 0), [opt.solved]);
 
-  const update = (fn: (s: GameState) => GameState) => setState((prev) => fn(structuredClone(prev)));
+  /** An edit of yours (painting, settings, cities, turn). */
+  const update = (fn: (s: GameState) => GameState) => {
+    touch('you');
+    setState((prev) => fn(structuredClone(prev)));
+  };
   const setSettings = (patch: Partial<GameState['settings']>) => update((st) => ({ ...st, settings: { ...st.settings, ...patch } }));
 
   /** Replace the whole map (new, example, loaded): clears results, banners and the screenshot. */
@@ -130,10 +148,13 @@ export default function App() {
    * A fresh read of the game on screen (Refresh, auto-update): takes the map from the save
    * but keeps the tool, view, screenshot, goal and the plan (which goes stale), with no undo or banner.
    */
-  const refreshState = (fn: (prev: GameState) => GameState, cities: number) => {
+  const refreshState = (fn: (prev: GameState) => GameState, cities: City[]) => {
+    const before = state.cities;
+    touch('save');
     setState((prev) => fn(prev));
     setLastPaint(null);
-    setTool((t) => (t.kind === 'territory' && t.city !== null && t.city >= cities ? { kind: 'look' } : t));
+    // A captured or lost city shifts the others: a territory tool for another city stops.
+    setTool((t) => (t.kind === 'territory' && t.city !== null && !sameCity(before[t.city], cities[t.city]) ? { kind: 'look' } : t));
   };
 
   const paint = (i: number, first: boolean) => {
@@ -174,7 +195,7 @@ export default function App() {
     const link = sync.link!;
     try {
       const r = toGameState(save, playerId, read.stamp.name);
-      refreshState((prev) => mergeRefresh(prev, link.incomeEstimate, r.state), r.state.cities.length);
+      refreshState((prev) => mergeRefresh(prev, link.incomeEstimate, r.state), r.state.cities);
       sync.linked(makeLink(read.kind, read.stamp, save, playerId, r.incomeEstimate), read);
       // The banners were about the read before this one.
       setNotice(null);
@@ -232,7 +253,7 @@ export default function App() {
   }, [shown, showPlan, state, stale]);
 
   const hoverTile = stepHover ?? hover ?? pinTile;
-  const hoverInfo = hover !== null ? describeTile(state, hover) : null;
+  const hoverInfo = hover !== null ? describeTile(state, hover, overlay) : null;
   const unsupported = !tribe.hasMarket;
   const busy = opt.busy === 'solve';
   // Tiles a market could use: explored land inside your territory.
@@ -240,7 +261,7 @@ export default function App() {
   const canSolve = !unsupported && state.cities.length > 0 && mappedTiles > 0;
   // Both Solve buttons (the plan panel's and the save bar's) run only when this is true.
   const canRun = canSolve && !busy && goalProblem === null;
-  const painted = lastPaint ? describeTile(state, lastPaint.tile) : null;
+  const painted = lastPaint ? describeTile(state, lastPaint.tile, overlay) : null;
   const [coarse] = useState(() => typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches);
 
   return (
@@ -452,7 +473,7 @@ export default function App() {
               editing={tool.kind !== 'look'}
               flash={lastPaint}
               onToolKey={onToolKey}
-              onKeyCursor={(i) => setCursorSay(describeTile(state, i) ?? '')}
+              onKeyCursor={(i) => setCursorSay(describeTile(state, i, overlay) ?? '')}
             />
           </div>
           <div className="mapfoot">
@@ -578,10 +599,10 @@ export default function App() {
               <h2 title={`Solved in ${opt.solved.ms} ms`}>Plan</h2>
               <ResultsPanel
                 key={opt.solved.runId}
-                state={state}
+                state={opt.solved.state}
                 result={shown}
                 frontier={opt.solved.frontier.plans}
-                currentIncome={curIncome}
+                currentIncome={solvedIncome}
                 selected={selectedIndex}
                 onSelect={(i) => opt.pick(state, i, opt.solved!.frontier.plans[i])}
                 onHoverTile={setStepHover}
@@ -593,7 +614,7 @@ export default function App() {
                   if (wrap && r && (r.bottom < 0 || r.top > window.innerHeight)) wrap.scrollIntoView({ block: 'center', behavior: 'smooth' });
                 }}
                 turn={opt.solved.turn}
-                stale={stale}
+                staleNote={stale ? staleNote(changedBy, opt.solved.turn, now) : null}
                 loading={opt.busy !== null}
               />
             </section>
@@ -612,16 +633,8 @@ export default function App() {
   );
 }
 
-function describeTile(state: GameState, i: number) {
-  const t = state.tiles[i];
-  if (!t) return null;
-  const parts = [where(state, i), t.terrain === 'unknown' ? 'unexplored' : t.terrain];
-  if (t.resource !== 'none') parts.push(t.resource);
-  if (t.improvement !== 'none') parts.push(t.improvement === 'other' ? 'other building' : t.improvement);
-  if (t.enemy) parts.push('enemy unit here');
-  if (t.city === null && t.terrain !== 'unknown') parts.push('not your territory');
-  return parts.join(' · ');
-}
+/** The same city (by where it stands). */
+const sameCity = (a: City | undefined, b: City | undefined) => !!a && !!b && a.x === b.x && a.y === b.y;
 
 function ToolBtn({ active, onClick, children, swatch, title }: { active: boolean; onClick: () => void; children: React.ReactNode; swatch?: string; title?: string }) {
   return (
@@ -686,7 +699,6 @@ function NewMap({ onCreate, onExample }: { onCreate: (w: number, h: number) => v
         </button>
         <button
           type="button"
-         
           onClick={() => {
             onExample();
             close();

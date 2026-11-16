@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { defaultGoalPrefs, type GoalPrefs, goalPrefsJson, parseGoalPrefs, resolveGoal, turnNow, turnsFromNow } from '../src/model/goalPrefs';
+import { defaultGoalPrefs, type GoalPrefs, parseGoalPrefs, resolveGoal, turnsFromNow } from '../src/model/goalPrefs';
+import { turnNow } from '../src/model/types';
 import { mapJson, parseJson } from '../src/model/io';
 import { evaluateGoal } from '../src/solver/goals';
 import { search } from '../src/solver/search';
@@ -8,9 +9,9 @@ import { makeState, withBuildings } from './helpers';
 describe('goal settings', () => {
   it('round-trip, one set of numbers per goal kind', () => {
     const p: GoalPrefs = { kind: 'bank', income: { income: 12, by: 40 }, bank: { stars: 1000, by: 30 }, 'best-by': { by: 25 } };
-    expect(parseGoalPrefs(goalPrefsJson(p))).toEqual(p);
+    expect(parseGoalPrefs(JSON.stringify(p))).toEqual(p);
     // Switching kind keeps the others' numbers.
-    expect(parseGoalPrefs(goalPrefsJson({ ...p, kind: 'max' }))).toEqual({ ...p, kind: 'max' });
+    expect(parseGoalPrefs(JSON.stringify({ ...p, kind: 'max' }))).toEqual({ ...p, kind: 'max' });
   });
 
   it('fall back to defaults for anything missing or broken', () => {
@@ -86,10 +87,11 @@ describe('saved maps keep the turn and city levels', () => {
     s.turn = 18;
     s.cities[0].level = 4;
     s.cities[0].population = 2;
+    s.cities[0].income = 7;
     s.settings.cityUpgrades = false;
     const p = parseJson(mapJson(s));
     expect(p.turn).toBe(18);
-    expect(p.cities[0]).toEqual({ name: 'City 1', x: 1, y: 1, level: 4, population: 2 });
+    expect(p.cities[0]).toEqual({ name: 'City 1', x: 1, y: 1, level: 4, population: 2, income: 7 });
     expect(p.settings.cityUpgrades).toBe(false);
   });
 
@@ -105,6 +107,11 @@ describe('saved maps keep the turn and city levels', () => {
     expect(parseJson(JSON.stringify(s)).cities[0]).toMatchObject({ level: 3, population: -3 });
     s.cities[0].population = -500;
     expect(parseJson(JSON.stringify(s)).cities[0]).toMatchObject({ level: 3, population: -99 });
+    s.cities[0].income = -2;
+    expect(parseJson(JSON.stringify(s)).cities[0].income).toBe(0);
+    s.cities[0].income = 'lots';
+    expect(parseJson(JSON.stringify(s)).cities[0]).not.toHaveProperty('income');
+    s.cities[0].income = 5;
     s.cities[0].level = 'big';
     expect(parseJson(JSON.stringify(s)).cities[0]).toEqual({ name: 'City 1', x: 1, y: 1 });
   });

@@ -98,13 +98,15 @@ export function parseJson(text: string): GameState {
   return { width: w!, height: h!, tiles, cities, settings, source: typeof s.source === 'string' ? s.source : undefined, ...(turn !== undefined && { turn }) };
 }
 
-/** A city's level and population, when they are known and make sense. */
-function cityGrowth(c: Partial<City>): Pick<City, 'level' | 'population'> {
+/** A city's level, population and income, when they are known and make sense. */
+function cityGrowth(c: Partial<City>): Pick<City, 'level' | 'population' | 'income'> {
   const level = c.level;
   if (!Number.isInteger(level) || level! < 1 || level! > 999) return {};
   const pop = Number.isInteger(c.population) ? c.population! : 0;
   // A city levels up once its population reaches level + 1; it can be below zero.
-  return { level, population: Math.min(level!, Math.max(MIN_POPULATION, pop)) };
+  const out: Pick<City, 'level' | 'population' | 'income'> = { level, population: Math.min(level!, Math.max(MIN_POPULATION, pop)) };
+  if (Number.isInteger(c.income)) out.income = Math.min(9999, Math.max(0, c.income!));
+  return out;
 }
 
 export function download(name: string, text: string) {

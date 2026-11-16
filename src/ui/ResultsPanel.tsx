@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { techName } from '../data/rules';
-import { type GameState, turnNow } from '../model/types';
+import type { GameState } from '../model/types';
 import type { Plan } from '../solver/exact';
 import type { GoalResult } from '../solver/goals';
 import { enemyBlocked } from '../solver/options';
@@ -8,9 +8,11 @@ import type { Step } from '../solver/schedule';
 import { describeAction, describeLevelUp, describeUpgrades, enemyNote, paybackTurns, starText } from './describe';
 
 interface Props {
+  /** The map the plan was solved for (the plan names its cities and tiles as they were then). */
   state: GameState;
   result: GoalResult;
   frontier: Plan[];
+  /** Market income on that map. */
   currentIncome: number;
   selected: number;
   onSelect: (i: number) => void;
@@ -19,13 +21,14 @@ interface Props {
   onShowTile: (t: number) => void;
   /** The game turn the plan was solved on (its build order counts from it). */
   turn: number;
-  /** The map changed since this was solved: other plans can't be picked. */
-  stale: boolean;
+  /** Why the plan is out of date (other plans can't be picked then), or null. */
+  staleNote: string | null;
   /** A plan's build order is being worked out. */
   loading: boolean;
 }
 
-export function ResultsPanel({ state, result, frontier, currentIncome, selected, onSelect, onHoverTile, onShowTile, turn: now, stale, loading }: Props) {
+export function ResultsPanel({ state, result, frontier, currentIncome, selected, onSelect, onHoverTile, onShowTile, turn: now, staleNote, loading }: Props) {
+  const stale = staleNote !== null;
   const [done, setDone] = useState<Set<number>>(new Set());
   // A different plan or result starts with nothing ticked.
   useEffect(() => setDone(new Set()), [result]);
@@ -40,8 +43,6 @@ export function ResultsPanel({ state, result, frontier, currentIncome, selected,
   const payback = paybackTurns(result.schedule, spend, gain);
   const blockedNote = useMemo(() => enemyNote(enemyBlocked(state).length), [state]);
   const levelUps = steps.flatMap((x) => x.levelUps ?? []);
-  // A refresh moved the game on: the plan's turn numbers are from when it was solved.
-  const movedOn = stale && turnNow(state) !== now;
 
   const byTurn = useMemo(() => {
     const m = new Map<number, { step: Step; n: number }[]>();
@@ -54,11 +55,7 @@ export function ResultsPanel({ state, result, frontier, currentIncome, selected,
 
   return (
     <section className={`results${stale ? ' stale' : ''}`}>
-      {stale && (
-        <p className="small note warn stale-note">
-          {movedOn ? `Out of date: the game moved on to turn ${turnNow(state)}. Press Solve again to update the plan.` : 'Out of date: you changed the map, settings or goal. Press Solve again to update the plan.'}
-        </p>
-      )}
+      {stale && <p className="small note warn stale-note">{staleNote}</p>}
       <p className={`summary${result.met ? '' : ' warn'}`} aria-live="polite">
         {result.summary}
       </p>
@@ -70,7 +67,7 @@ export function ResultsPanel({ state, result, frontier, currentIncome, selected,
           value={spend < 0 ? `+${-spend}★` : `${spend}★`}
           sub={techSteps.length ? `${techCost}★ of it on techs` : 'no new techs'}
         />
-        <Stat label="Pays for itself" value={payback === null ? '—' : payback === 0 ? 'right away' : `${payback} turn${payback === 1 ? '' : 's'}`} sub={steps.length ? (result.schedule.doneTurn === 0 ? 'all built this turn' : `last step on turn ${now + result.schedule.doneTurn}`) : ''} />
+        <Stat label="Pays for itself" value={payback === null ? '—' : payback === 0 ? 'right away' : `${payback} turn${payback === 1 ? '' : 's'}`} sub={steps.length ? (result.schedule.doneTurn === 0 ? (stale ? `all built on turn ${now}` : 'all built this turn') : `last step on turn ${now + result.schedule.doneTurn}`) : ''} />
       </div>
       {techSteps.length > 0 && (
         <p className="techs-line">
@@ -96,7 +93,7 @@ export function ResultsPanel({ state, result, frontier, currentIncome, selected,
           {byTurn.map(([turn, items]) => (
             <li key={turn} className="turn">
               <div className="turn-head">
-                <span>{turn === 0 ? `Turn ${now} (this turn)` : `Turn ${now + turn}`}</span>
+                <span>{turn === 0 && !stale ? `Turn ${now} (this turn)` : `Turn ${now + turn}`}</span>
                 <span className="muted">{items[0].step.starsBefore}★ available</span>
               </div>
               <ul>

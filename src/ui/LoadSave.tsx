@@ -167,7 +167,7 @@ export function SyncBar({ sync, planStale, onSolve }: { sync: SaveSync; planStal
   const what = link.kind === 'input' ? 'Loaded' : 'Synced';
   const when = sync.watching ? 'watching for changes' : formatAgo(now - link.syncedAt);
   return (
-    <div className="syncbar" role="group" aria-label="Save file">
+    <div className="syncbar" role="region" aria-label="Save file">
       <span className="syncinfo">
         <span className="syncfile" title={link.fileName}>
           {link.fileName}

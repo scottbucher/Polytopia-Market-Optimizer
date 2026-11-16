@@ -24,6 +24,12 @@ export interface City {
    * Below zero (red pips) after destroying buildings: each one costs 1★ per turn.
    */
   population?: number;
+  /**
+   * Stars per turn the city makes (its level, +1 per Workshop and Park, +1 for the
+   * capital), the most population below zero can take away. From the save; absent on
+   * hand-drawn maps, where the level stands in for it.
+   */
+  income?: number;
 }
 
 export interface Settings {

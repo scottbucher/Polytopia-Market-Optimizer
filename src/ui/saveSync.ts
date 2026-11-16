@@ -76,6 +76,22 @@ export function sameGame(a: GameKey | null | undefined, b: GameKey): boolean {
   return !!a && a.fileName === b.fileName && a.mapName === b.mapName && a.width === b.width && a.height === b.height;
 }
 
+/**
+ * Tells a read that started before another map or save went on screen that it is out of
+ * date: it takes a ticket when it starts and checks it before using what it read.
+ */
+export function generationGate() {
+  let n = 0;
+  return {
+    /** Another map or save is on screen now: tickets taken before it no longer count. */
+    bump: () => {
+      n++;
+    },
+    ticket: () => n,
+    isCurrent: (ticket: number) => ticket === n,
+  };
+}
+
 export function changed(a: FileStamp | null | undefined, b: FileStamp): boolean {
   return !a || a.name !== b.name || a.lastModified !== b.lastModified || a.size !== b.size;
 }
@@ -107,9 +123,17 @@ export type SaveRoute =
 export function routeSave(link: LinkedSave | null, save: RawSave, fileName: string, why: SyncWhy): SaveRoute {
   const humans = humanPlayers(save);
   if (!humans.length) return { kind: 'error', message: why === 'load' ? 'No human player found in this save.' : 'No human player found in the save any more, so the map was left as it is.' };
-  if (why !== 'load' && link && sameGame(link, gameKeyOf(save, fileName)) && humans.some((h) => h.id === link.playerId)) return { kind: 'refresh', playerId: link.playerId };
-  // A different game: a new file in the save folder, or another file picked on Refresh.
-  const note = why === 'auto' ? 'Found a new game in the save folder.' : why === 'refresh' ? 'That save is a different game, so it replaced the map.' : undefined;
+  const same = why !== 'load' && !!link && sameGame(link, gameKeyOf(save, fileName));
+  if (same && humans.some((h) => h.id === link!.playerId)) return { kind: 'refresh', playerId: link!.playerId };
+  // A different game (a new file in the save folder, or another file picked on Refresh),
+  // or the same one without the player you picked.
+  const note = same
+    ? "The player you picked isn't in this save any more."
+    : why === 'auto'
+      ? 'Found a new game in the save folder.'
+      : why === 'refresh'
+        ? 'That save is a different game, so it replaced the map.'
+        : undefined;
   return humans.length === 1 ? { kind: 'replace', playerId: humans[0].id, note } : { kind: 'ask', note };
 }
 

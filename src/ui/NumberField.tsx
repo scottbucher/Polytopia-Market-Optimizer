@@ -42,7 +42,8 @@ export function NumberField({ value, onChange, min = 0, max = Infinity, step = 1
   return (
     <input
       type="number"
-      inputMode={integer ? 'numeric' : 'decimal'}
+      // The iPhone number pads have no minus key: below zero needs the default keyboard.
+      inputMode={min < 0 ? undefined : integer ? 'numeric' : 'decimal'}
       className={className}
       min={min}
       max={Number.isFinite(max) ? max : undefined}

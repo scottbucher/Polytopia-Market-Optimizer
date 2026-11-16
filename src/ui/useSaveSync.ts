@@ -6,7 +6,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { readPref, writePref } from '../model/prefs';
 import { parseStateFile, type RawSave } from '../parse/stateFile';
 import { findCurrent, type Found, fsAccess, loadStored, observe, permission, pickFile, pickFolder, type Source, saveStored, type StoredSource } from './saveSource';
-import { changed, type FileStamp, type LinkedSave, type SyncWhy, withRetry } from './saveSync';
+import { changed, type FileStamp, generationGate, type LinkedSave, type SyncWhy, withRetry } from './saveSync';
 
 export type { SyncWhy } from './saveSync';
 
@@ -35,6 +35,8 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 const parse = async (f: File) => parseStateFile(new Uint8Array(await f.arrayBuffer()));
 const detail = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const domName = (e: unknown) => (e instanceof DOMException ? e.name : '');
+const NO_GAME = 'No game in this folder right now. The next game you play loads here by itself.';
+const notASave = (e: unknown) => `Couldn't read that save file. Make sure it's a .state file from the game's save folder. (Details: ${detail(e)})`;
 
 export function useSaveSync(opts: Options) {
   const optsRef = useRef(opts);
@@ -56,7 +58,7 @@ export function useSaveSync(opts: Options) {
   const busy = useRef<Promise<void> | null>(null);
   // Bumped whenever another map or save goes on screen, so a read that started before
   // (a refresh, or an auto-update still retrying) doesn't bring the old save back.
-  const generation = useRef(0);
+  const [generation] = useState(generationGate);
 
   const setWatch = (v: boolean) => {
     setWatchState(v);
@@ -68,11 +70,13 @@ export function useSaveSync(opts: Options) {
     void saveStored(v.source || v.link ? v : null);
   };
 
-  // Come back to the save of the last visit.
+  // Come back to the save of the last visit, unless another map or save went on screen meanwhile.
   useEffect(() => {
     let live = true;
+    const gen = generation.ticket();
+    const current = () => live && generation.isCurrent(gen);
     loadStored().then(async (rec) => {
-      if (!live || !rec) return;
+      if (!current() || !rec) return;
       if (rec.source && !fsAccess) return;
       setStored(rec.source ?? null);
       if (rec.link) {
@@ -81,7 +85,7 @@ export function useSaveSync(opts: Options) {
       }
       if (rec.source && rec.link) {
         const p = await permission(rec.source, false);
-        if (!live) return;
+        if (!current()) return;
         setSource(rec.source);
         setNeedsPermission(p !== 'granted');
       }
@@ -89,7 +93,7 @@ export function useSaveSync(opts: Options) {
     return () => {
       live = false;
     };
-  }, []);
+  }, [generation]);
 
   const problemFor = (e: unknown, src: Source | undefined): string => {
     const name = domName(e);
@@ -112,9 +116,9 @@ export function useSaveSync(opts: Options) {
     busy.current = new Promise<void>((r) => (done = r));
     if (why !== 'auto') setStatus({ kind: 'busy' });
     let seen: FileStamp | null = null;
-    const gen = generation.current;
+    const gen = generation.ticket();
     // A refresh or auto-update of a save that is no longer on screen.
-    const gone = () => why !== 'load' && (generation.current !== gen || sourceRef.current !== src);
+    const gone = () => why !== 'load' && (!generation.isCurrent(gen) || sourceRef.current !== src);
     try {
       const got = await withRetry(
         async () => {
@@ -132,7 +136,7 @@ export function useSaveSync(opts: Options) {
         if (why === 'load') {
           setStatus({ kind: 'idle' });
           optsRef.current.onLoadError("There's no .state file in that folder. Choose the Singleplayer folder (see Where is it?).");
-        } else setStatus({ kind: 'note', message: 'No game in this folder right now. The next game you play loads here by itself.' });
+        } else setStatus({ kind: 'note', message: NO_GAME });
         return;
       }
       lastStamp.current = got.stamp;
@@ -145,9 +149,7 @@ export function useSaveSync(opts: Options) {
       if (domName(e) === 'NotAllowedError') setNeedsPermission(true);
       if (why === 'load') {
         setStatus({ kind: 'idle' });
-        optsRef.current.onLoadError(
-          domName(e) ? problemFor(e, src) : `Couldn't read that save file. Make sure it's a .state file from the game's save folder. (Details: ${detail(e)})`,
-        );
+        optsRef.current.onLoadError(domName(e) ? problemFor(e, src) : notASave(e));
       } else setStatus({ kind: 'problem', message: problemFor(e, src) });
     } finally {
       // A dropped read takes back its "Reading…" and leaves any other status alone.
@@ -164,7 +166,7 @@ export function useSaveSync(opts: Options) {
       const save = await parse(file);
       optsRef.current.onSave(save, { kind: 'input', stamp: { name: file.name, lastModified: file.lastModified, size: file.size } }, why);
     } catch (e) {
-      optsRef.current.onLoadError(`Couldn't read that save file. Make sure it's a .state file from the game's save folder. (Details: ${detail(e)})`);
+      optsRef.current.onLoadError(notASave(e));
     }
   };
 
@@ -181,7 +183,7 @@ export function useSaveSync(opts: Options) {
       return;
     }
     if (!found) {
-      if (lastStamp.current) setStatus({ kind: 'note', message: 'No game in this folder right now. The next game you play loads here by itself.' });
+      if (lastStamp.current) setStatus({ kind: 'note', message: NO_GAME });
       lastStamp.current = null;
       return;
     }
@@ -286,7 +288,7 @@ export function useSaveSync(opts: Options) {
     },
     /** The app put this save on screen. */
     linked: (next: LinkedSave, read: SaveRead) => {
-      generation.current++;
+      generation.bump();
       const src = read.kind === 'input' ? null : read.source;
       setLink(next);
       linkRef.current = next;
@@ -299,7 +301,7 @@ export function useSaveSync(opts: Options) {
     },
     /** Another map replaced the save's: stop following it (it can still be opened again). */
     unlink: () => {
-      generation.current++;
+      generation.bump();
       if (!linkRef.current) return;
       setLink(null);
       linkRef.current = null;

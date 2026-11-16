@@ -10,7 +10,7 @@
 // of the city's income until it grows back.
 
 import { BUILDING_POPULATION, type CityReward, type CityRewardDef, cityReward, isProducer, LEVEL_INCOME, PRODUCER_POPULATION, PRODUCER_SUPPORT, popToLevelUp } from '../data/rules';
-import type { GameState } from '../model/types';
+import type { City, GameState } from '../model/types';
 import { type LayoutGet, producerLevelAt } from './income';
 
 export interface LevelUp {
@@ -28,6 +28,8 @@ export interface Growth {
   level: number[];
   /** Population toward the next level; below zero after buildings were destroyed. */
   pop: number[];
+  /** Stars per turn each city makes, before population below zero takes any away. */
+  income: number[];
   /** Cities whose level is known (others are left out). */
   on: boolean[];
 }
@@ -40,21 +42,27 @@ export function growthStart(state: GameState): Growth | null {
   return {
     level: state.cities.map((c) => c.level ?? 0),
     pop: state.cities.map((c) => c.population ?? 0),
+    income: state.cities.map(cityIncome),
     on,
   };
 }
 
 /**
- * Stars per turn a city at `level` loses to negative population: 1 per missing
- * population, down to no income from the city. (Its income is at least its level;
- * Workshops and Parks it already has aren't known, so the cap is the level.)
+ * Stars per turn a city makes: from the save when it was read from one, else its level
+ * (a hand-drawn map doesn't say which Workshops and Parks it has).
  */
-export const popPenalty = (level: number, pop: number) => Math.min(level * LEVEL_INCOME, Math.max(0, -pop));
+export const cityIncome = (c: City) => c.income ?? (c.level ?? 0) * LEVEL_INCOME;
+
+/**
+ * Stars per turn a city making `income` loses to negative population: 1 per missing
+ * population, down to no income from the city.
+ */
+export const popPenalty = (income: number, pop: number) => Math.min(Math.max(0, income), Math.max(0, -pop));
 
 /** Stars per turn all cities lose to population below zero, as `g` stands. */
 export function penaltyOf(g: Growth): number {
   let n = 0;
-  for (let c = 0; c < g.pop.length; c++) if (g.on[c]) n += popPenalty(g.level[c], g.pop[c]);
+  for (let c = 0; c < g.pop.length; c++) if (g.on[c]) n += popPenalty(g.income[c], g.pop[c]);
   return n;
 }
 
@@ -127,9 +135,10 @@ function fill(level: number, pop: number, n: number, each: (level: number, r: Ci
 /** Adds (or takes away) population in a city and levels it up each time it fills. Mutates `g`; returns the level-ups. */
 export function grow(g: Growth, city: number, pop: number, out: LevelUp[] = []): LevelUp[] {
   if (!g.on[city] || pop === 0) return out;
-  [g.level[city], g.pop[city]] = fill(g.level[city], g.pop[city], pop, (level, r) =>
-    out.push({ city, level, reward: r.reward, stars: r.stars, income: LEVEL_INCOME + r.income }),
-  );
+  [g.level[city], g.pop[city]] = fill(g.level[city], g.pop[city], pop, (level, r) => {
+    g.income[city] += LEVEL_INCOME + r.income;
+    out.push({ city, level, reward: r.reward, stars: r.stars, income: LEVEL_INCOME + r.income });
+  });
   return out;
 }
 
@@ -149,11 +158,12 @@ export function growthValue(g: Growth, gains: Map<number, number>): { stars: num
   let income = 0;
   for (const [c, n] of gains) {
     if (!g.on[c] || n === 0) continue;
-    const [level, pop] = fill(g.level[c], g.pop[c], n, (_, r) => {
+    let made = g.income[c];
+    const [, pop] = fill(g.level[c], g.pop[c], n, (_, r) => {
       stars += r.stars;
-      income += LEVEL_INCOME + r.income;
+      made += LEVEL_INCOME + r.income;
     });
-    income -= popPenalty(level, pop) - popPenalty(g.level[c], g.pop[c]);
+    income += made - g.income[c] - (popPenalty(made, pop) - popPenalty(g.income[c], g.pop[c]));
   }
   return { stars, income };
 }

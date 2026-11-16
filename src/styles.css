@@ -734,6 +734,11 @@ main:has(> .mapcol.wide) {
 .citylabel .pip:not(.on) {
   fill: var(--label-bg);
 }
+/* Population below zero: red pips, as in the game. */
+.citylabel .pip.neg {
+  fill: #e03131;
+  stroke: #7d1414;
+}
 .city path {
   stroke: rgba(0, 0, 0, 0.55);
   stroke-width: 1.2;

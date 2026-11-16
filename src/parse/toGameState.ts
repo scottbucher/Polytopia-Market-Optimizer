@@ -14,6 +14,7 @@ import {
   tribeFromIdx,
 } from '../data/rules';
 import { defaultSettings } from '../model/defaults';
+import { popPenalty } from '../solver/cities';
 import type { City, GameState, Tile } from '../model/types';
 import { IMP_CITY, type RawSave, type RawTile } from './stateFile';
 
@@ -103,18 +104,19 @@ export function toGameState(save: RawSave, playerId: number, fileName = 'save'):
       if (t.improvement === IMP_CITY && t.owner === playerId && t.visibility.includes(playerId)) {
         cityAt.set(`${t.x},${t.y}`, cities.length);
         const city: City = { name: t.city?.name || `City ${cities.length + 1}`, x: t.x, y: t.y };
+        // A city makes its level in stars, plus 1 per Workshop and Park; the save's
+        // `production` is 1 + Workshops + Parks. The capital makes 1 more.
+        const made = Math.max(0, (t.city ? t.city.level + t.city.production - 1 : 0) + (t.capitalOf === playerId ? 1 : 0));
         if (t.city && t.city.level >= 1) {
           city.level = t.city.level;
           // `population` is the progress toward the next level (the filled pips in the game);
           // below zero after buildings were destroyed.
           city.population = Math.max(MIN_POPULATION, Math.min(t.city.level, t.city.population));
+          city.income = made;
         }
         cities.push(city);
-        // A city makes its level in stars, plus 1 per Workshop and Park; the save's
-        // `production` is 1 + Workshops + Parks. The capital makes 1 more. Each population
-        // below zero takes 1★ off, down to nothing.
-        const made = (t.city ? t.city.level + t.city.production - 1 : 0) + (t.capitalOf === playerId ? 1 : 0);
-        incomeEstimate += Math.max(0, made - Math.max(0, -(city.population ?? 0)));
+        // Each population below zero takes 1★ off, down to nothing (as the planner counts it).
+        incomeEstimate += made - popPenalty(made, city.population ?? 0);
       }
     }
   }

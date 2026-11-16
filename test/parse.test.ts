@@ -3,6 +3,7 @@ import { decompressState, lz4DecompressBlock } from '../src/parse/lz4';
 import { compressState, compressStateLiteral, lz4CompressBlock } from './lz4Writer';
 import { parseStateFile, type RawSave, type RawTile } from '../src/parse/stateFile';
 import { humanPlayers, techsFromIdx, toGameState } from '../src/parse/toGameState';
+import { growthStart } from '../src/solver/cities';
 
 function fogTile(x: number, y: number, p: Partial<RawTile>): RawTile {
   return { x, y, terrain: 3, climate: 1, owner: 0, capitalOf: 0, rulingCity: [-1, -1], resource: -1, improvement: -1, improvementLevel: 0, city: null, unit: null, passenger: null, visibility: [1], ...p };
@@ -79,7 +80,7 @@ describe('save file', () => {
     expect(at(2, 2).improvement).toBe('market');
     expect(at(3, 3)).toMatchObject({ improvement: 'other', city: null }); // their market is no use to you
     expect(at(4, 4)).toMatchObject({ improvement: 'other', city: null });
-    expect(r.state.cities).toEqual([{ name: 'Home', x: 1, y: 1, level: 1, population: 1 }]);
+    expect(r.state.cities).toEqual([{ name: 'Home', x: 1, y: 1, level: 1, population: 1, income: 3 }]);
     expect(r.state.settings).toMatchObject({ stars: 9, baseIncome: 3, tribe: 'bardur' });
     expect(r.state.turn).toBe(7);
     // nothing about the other player leaks into the state
@@ -97,6 +98,24 @@ describe('save file', () => {
     // level 4 + Workshop + Park + capital
     expect(r.incomeEstimate).toBe(7);
     expect(r.state.settings.baseIncome).toBe(7);
+    expect(r.state.cities[0].income).toBe(7);
+  });
+
+  it('keeps population in range, and population below zero takes from the whole city income', () => {
+    const read = (population: number) => {
+      const tiles = world();
+      tiles[1][1] = { ...tiles[1][1], level: 4, population, production: 3, capitalOf: 1 };
+      return toGameState(parseStateFile(makeSave({ tiles, players: players([]) })), 1);
+    };
+    // The city levels up at 5: a save never has more than 4, and nothing below -99 is kept.
+    expect(read(9).state.cities[0].population).toBe(4);
+    expect(read(-150).state.cities[0].population).toBe(-99);
+    // 3 below zero: 3★ less of the 7★ it makes, the same cap the plan uses.
+    expect(read(-3).incomeEstimate).toBe(4);
+    expect(read(-6).incomeEstimate).toBe(1);
+    expect(read(-150).incomeEstimate).toBe(0);
+    const s = read(-6).state;
+    expect(growthStart(s)).toMatchObject({ income: [7], pop: [-6] });
   });
 
   it('shows resources once you have the tech', () => {

@@ -3,7 +3,8 @@ import { parseStateFile } from '../src/parse/stateFile';
 import { toGameState } from '../src/parse/toGameState';
 import { detectOs, SAVE_HINTS, saveHint } from '../src/ui/savePaths';
 import { noFollowReason } from '../src/ui/LoadSave';
-import { changed, formatAgo, gameKeyOf, isMultiplayerFolder, loadNotice, makeLink, mergeRefresh, newestStateFile, routeSave, sameGame, withRetry } from '../src/ui/saveSync';
+import { staleNote } from '../src/ui/describe';
+import { changed, formatAgo, gameKeyOf, generationGate, isMultiplayerFolder, loadNotice, makeLink, mergeRefresh, newestStateFile, routeSave, sameGame, withRetry } from '../src/ui/saveSync';
 import { type FakeTile, makeSave } from './saveWriter';
 
 const UA = {
@@ -48,6 +49,34 @@ describe('where the save is', () => {
   it('only offers following the folder where Chrome allows it', () => {
     // Chromium refuses ~/Library on macOS and ~/.config, ~/.local/share on Linux.
     expect(Object.entries(SAVE_HINTS).filter(([, h]) => h.canFollow).map(([k]) => k)).toEqual(['windows']);
+  });
+});
+
+describe('the note on an out-of-date plan', () => {
+  const end = ' Press Solve again to update the plan.';
+  it('says what changed, without blaming you for the save', () => {
+    expect(staleNote({ save: true }, 5, 5)).toBe(`Out of date: your save changed since this plan was made.${end}`);
+    expect(staleNote({ you: true }, 5, 5)).toBe(`Out of date: you changed the map, settings or goal.${end}`);
+    expect(staleNote({ save: true, you: true }, 5, 5)).toBe(`Out of date: your save changed, and so did your map, settings or goal.${end}`);
+    // The turn can go down too.
+    expect(staleNote({ save: true }, 5, 7)).toBe(`Out of date: the save is now on turn 7.${end}`);
+    expect(staleNote({ save: true, you: true }, 5, 3)).toBe(`Out of date: the save is now on turn 3.${end}`);
+    expect(staleNote({ you: true }, 5, 6)).toBe(`Out of date: the turn is now 6.${end}`);
+  });
+});
+
+describe('reads that started before another map went on screen', () => {
+  it('no longer count', () => {
+    const g = generationGate();
+    const first = g.ticket();
+    expect(g.isCurrent(first)).toBe(true);
+    g.bump();
+    expect(g.isCurrent(first)).toBe(false);
+    const second = g.ticket();
+    expect(g.isCurrent(second)).toBe(true);
+    g.bump();
+    g.bump();
+    expect([g.isCurrent(first), g.isCurrent(second)]).toEqual([false, false]);
   });
 });
 
@@ -167,6 +196,12 @@ describe('refreshing the same game', () => {
     expect(mergeRefresh(prev, 3, toGameState(save({ production: 1 }), 1).state).settings.baseIncome).toBe(0);
   });
 
+  it('keeps a correction upwards, never past what you can type', () => {
+    const prev = structuredClone(toGameState(save({ production: 3 }), 1).state);
+    prev.settings.baseIncome = 9998; // you said 9995 more than the estimate
+    expect(mergeRefresh(prev, 3, toGameState(save({ production: 5 }), 1).state).settings.baseIncome).toBe(9999);
+  });
+
   it('keeps city names only where the city still is', () => {
     const prev = toGameState(save(), 1).state;
     prev.cities[0].name = 'Renamed';
@@ -264,13 +299,15 @@ describe('what a read means', () => {
     // Still the same game for the player you picked.
     expect(routeSave(link, save({ humans: 2 }), '123.state', 'auto')).toEqual({ kind: 'refresh', playerId: 1 });
     const other = { ...link, playerId: 7 };
-    expect(routeSave(other, save({ humans: 2 }), '123.state', 'refresh')).toEqual({ kind: 'ask', note: 'That save is a different game, so it replaced the map.' });
+    expect(routeSave(other, save({ humans: 2 }), '123.state', 'refresh')).toEqual({ kind: 'ask', note: "The player you picked isn't in this save any more." });
+    expect(routeSave(other, save(), '123.state', 'auto')).toEqual({ kind: 'replace', playerId: 1, note: "The player you picked isn't in this save any more." });
   });
 
   it('says so when there is no human player, also on a refresh', () => {
     expect(routeSave(null, save({ humans: 0 }), 'a.state', 'load')).toEqual({ kind: 'error', message: 'No human player found in this save.' });
-    expect(routeSave(link, save({ humans: 0 }), '123.state', 'refresh')).toMatchObject({ kind: 'error' });
-    expect(routeSave(link, save({ humans: 0 }), '123.state', 'auto')).toMatchObject({ kind: 'error' });
+    const kept = { kind: 'error', message: 'No human player found in the save any more, so the map was left as it is.' };
+    expect(routeSave(link, save({ humans: 0 }), '123.state', 'refresh')).toEqual(kept);
+    expect(routeSave(link, save({ humans: 0 }), '123.state', 'auto')).toEqual(kept);
   });
 
   it('the banner after loading', () => {
@@ -291,6 +328,34 @@ describe('population below zero in a save', () => {
     expect(r.incomeEstimate).toBe(2);
     expect(toGameState(save({ production: 2, city: { level: 3, population: 2 } }), 1).incomeEstimate).toBe(4);
     expect(toGameState(save({ production: 1, city: { level: 1, population: -9 } }), 1).incomeEstimate).toBe(0);
+  });
+});
+
+describe('the note on an out-of-date plan', () => {
+  const end = ' Press Solve again to update the plan.';
+  it('says what changed, without blaming you for the save', () => {
+    expect(staleNote({ save: true }, 5, 5)).toBe(`Out of date: your save changed since this plan was made.${end}`);
+    expect(staleNote({ you: true }, 5, 5)).toBe(`Out of date: you changed the map, settings or goal.${end}`);
+    expect(staleNote({ save: true, you: true }, 5, 5)).toBe(`Out of date: your save changed, and so did your map, settings or goal.${end}`);
+    // The turn can go down too.
+    expect(staleNote({ save: true }, 5, 7)).toBe(`Out of date: the save is now on turn 7.${end}`);
+    expect(staleNote({ save: true, you: true }, 5, 3)).toBe(`Out of date: the save is now on turn 3.${end}`);
+    expect(staleNote({ you: true }, 5, 6)).toBe(`Out of date: the turn is now 6.${end}`);
+  });
+});
+
+describe('reads that started before another map went on screen', () => {
+  it('no longer count', () => {
+    const g = generationGate();
+    const first = g.ticket();
+    expect(g.isCurrent(first)).toBe(true);
+    g.bump();
+    expect(g.isCurrent(first)).toBe(false);
+    const second = g.ticket();
+    expect(g.isCurrent(second)).toBe(true);
+    g.bump();
+    g.bump();
+    expect([g.isCurrent(first), g.isCurrent(second)]).toEqual([false, false]);
   });
 });
 

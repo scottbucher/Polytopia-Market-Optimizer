@@ -1,4 +1,4 @@
-import { MIN_POPULATION } from '../data/rules';
+import { LEVEL_INCOME, MIN_POPULATION } from '../data/rules';
 import type { City } from '../model/types';
 import { cityColor } from './MapView';
 import { NumberField } from './NumberField';
@@ -21,8 +21,12 @@ export function CityRow({ city: c, index: i, onChange }: { city: City; index: nu
               if (e.target.value === '') {
                 delete city.level;
                 delete city.population;
+                delete city.income;
               } else {
-                city.level = Number(e.target.value);
+                const level = Number(e.target.value);
+                // Each level makes 1★ more; the save's Workshops and Parks stay.
+                if (city.income !== undefined) city.income = Math.max(0, city.income + (level - (city.level ?? level)) * LEVEL_INCOME);
+                city.level = level;
                 city.population = Math.min(city.level, city.population ?? 0);
               }
             })
@@ -37,7 +41,14 @@ export function CityRow({ city: c, index: i, onChange }: { city: City; index: nu
         </select>
         {c.level !== undefined && (
           <label className="pop" title="Below zero after destroying buildings (red pips in the game)">
-            <NumberField aria-label={`Population of ${label}`} min={MIN_POPULATION} max={c.level} value={c.population ?? 0} onChange={(v) => onChange((city) => (city.population = v))} />/{c.level + 1}
+            <NumberField
+              aria-label={`Population of ${label}, levels up at ${c.level + 1}`}
+              min={MIN_POPULATION}
+              max={c.level}
+              value={c.population ?? 0}
+              onChange={(v) => onChange((city) => (city.population = v))}
+            />
+            <span aria-hidden="true">/{c.level + 1}</span>
           </label>
         )}
       </span>

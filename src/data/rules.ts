@@ -341,7 +341,8 @@ export const TECH_ROOTS: TechKey[] = TECHS.filter((t) => t.parent === null).map(
 // (the save's city `production` field is 1 + Workshops + Parks).
 // Destroying a building takes its population away again. Population can go below zero
 // (the save stores it signed); each point below zero costs 1★ per turn of that city's
-// income, and a city never loses a level (Polytopia wiki, Population; not in the data).
+// income, down to nothing, and a city never loses a level. That penalty is from the
+// Polytopia wiki (Population) only: it is not in the data and not yet checked against a save.
 
 /** Population a building adds to the city it stands in. */
 export const BUILDING_POPULATION: Partial<Record<BuildingKind, number>> = { farm: 2, lumberhut: 1, mine: 2, aquafarm: 2 };
