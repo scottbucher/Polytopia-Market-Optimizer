@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { readPref, writePref } from '../model/prefs';
 import { parseStateFile, type RawSave } from '../parse/stateFile';
-import { findCurrent, type Found, fsAccess, loadStored, observe, permission, pickFile, pickFolder, type Source, saveStored, type StoredSource } from './saveSource';
+import { findCurrent, type Found, fsAccess, loadStored, observe, permission, pickFolder, type Source, saveStored, type StoredSource } from './saveSource';
 import { changed, type FileStamp, generationGate, type LinkedSave, type SyncWhy, withRetry } from './saveSync';
 
 export type { SyncWhy } from './saveSync';
@@ -243,14 +243,6 @@ export function useSaveSync(opts: Options) {
     /** A file or folder from before that isn't the map on screen now. */
     reopenable: !link && stored ? stored : null,
 
-    pickFile: async () => {
-      try {
-        const src = await pickFile(sourceRef.current?.handle ?? stored?.handle);
-        if (src) await readFrom(src, 'load');
-      } catch (e) {
-        optsRef.current.onLoadError(problemFor(e, undefined));
-      }
-    },
     pickFolder: async () => {
       try {
         const src = await pickFolder(sourceRef.current?.handle ?? stored?.handle);
