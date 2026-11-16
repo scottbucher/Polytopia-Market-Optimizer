@@ -4,7 +4,7 @@ import { blankState, exampleState } from './model/defaults';
 import { download, loadLocal, mapJson, parseJson, saveLocal } from './model/io';
 import { applyTool, type Tool } from './model/paint';
 import type { GameState, Goal } from './model/types';
-import { parseStateFile, type RawSave } from './parse/stateFile';
+import type { RawSave } from './parse/stateFile';
 import { humanPlayers, toGameState } from './parse/toGameState';
 import { currentLayout } from './solver/exact';
 import type { GoalResult } from './solver/goals';
@@ -18,6 +18,9 @@ import { ResultsPanel } from './ui/ResultsPanel';
 import { ScreenshotPanel } from './ui/ScreenshotPanel';
 import { TechPicker } from './ui/TechPicker';
 import { useOptimizer } from './ui/useOptimizer';
+import { LoadSave, SyncBar } from './ui/LoadSave';
+import { gameKeyOf, makeLink, mergeRefresh, sameGame } from './ui/saveSync';
+import { type SaveRead, type SyncWhy, useSaveSync } from './ui/useSaveSync';
 
 const TERRAINS: [Terrain, string][] = [
   ['field', 'Field'],
@@ -68,11 +71,20 @@ export default function App() {
   const [stepHover, setStepHover] = useState<number | null>(null);
   // A step tapped in the build order stays highlighted on the map until the next tap.
   const [pinTile, setPinTile] = useState<number | null>(null);
-  const [pendingSave, setPendingSave] = useState<{ save: RawSave; name: string } | null>(null);
+  const [pendingSave, setPendingSave] = useState<{ save: RawSave; name: string; read: SaveRead; note?: string } | null>(null);
   const [backdrop, setBackdrop] = useState<Backdrop | null>(null);
   const [tileOpacity, setTileOpacity] = useState(1);
   const [showPlan, setShowPlan] = useState(true);
   const saveInput = useRef<HTMLInputElement>(null);
+  const sync = useSaveSync({
+    onSave: (save, read, why) => ingestSave(save, read, why),
+    onLoadError: (m) => {
+      setNotice(null);
+      setPendingSave(null);
+      setError(m);
+    },
+    openInput: () => saveInput.current?.click(),
+  });
   const jsonInput = useRef<HTMLInputElement>(null);
   const onError = useCallback((m: string) => setError(m), []);
   const opt = useOptimizer(onError);
@@ -90,7 +102,8 @@ export default function App() {
   const setSettings = (patch: Partial<GameState['settings']>) => update((st) => ({ ...st, settings: { ...st.settings, ...patch } }));
 
   /** Replace the whole map (new, example, loaded): clears results, banners and the screenshot. */
-  const replaceState = (next: GameState, message: string | null, undoable = true) => {
+  const replaceState = (next: GameState, message: string | null, undoable = true, fromSave = false) => {
+    if (!fromSave) sync.unlink();
     setUndo(undoable ? state : null);
     setState(next);
     setMapId((n) => n + 1);
@@ -107,6 +120,16 @@ export default function App() {
     setBackdrop(null);
     setTileOpacity(1);
     if (goalKind === 'income') editGoal({ ...goals.income, income: Math.max(1, income(currentLayout(next), next.width, next.height).total + 4) });
+  };
+
+  /**
+   * A fresh read of the game on screen (Refresh, auto-update): takes the map from the save
+   * but keeps the tool, view, screenshot, goal and the plan (which goes stale), with no undo or banner.
+   */
+  const refreshState = (fn: (prev: GameState) => GameState, cities: number) => {
+    setState((prev) => fn(prev));
+    setLastPaint(null);
+    setTool((t) => (t.kind === 'territory' && t.city !== null && t.city >= cities ? { kind: 'look' } : t));
   };
 
   const paint = (i: number, first: boolean) => {
@@ -131,28 +154,46 @@ export default function App() {
   };
 
   // ---------- loading ----------
-  const loadSaveFile = async (f: File) => {
-    setError(null);
-    setNotice(null);
-    setPendingSave(null);
-    try {
-      const save = parseStateFile(new Uint8Array(await f.arrayBuffer()));
-      const humans = humanPlayers(save);
-      if (!humans.length) throw new Error('No human player found in this save.');
-      if (humans.length === 1) applySave(save, humans[0].id, f.name);
-      else setPendingSave({ save, name: f.name });
-    } catch (e) {
-      setError(`Couldn't read that save file. Make sure it's a .state file from the game's save folder. (Details: ${e instanceof Error ? e.message : String(e)})`);
+  /** A save was read: a new load, or a refresh that keeps your settings when it's the same game. */
+  const ingestSave = (save: RawSave, read: SaveRead, why: SyncWhy) => {
+    const humans = humanPlayers(save);
+    if (!humans.length) {
+      if (why === 'load') setError('No human player found in this save.');
+      return;
+    }
+    const link = sync.link;
+    if (why !== 'load' && link && sameGame(link, gameKeyOf(save, read.stamp.name)) && humans.some((h) => h.id === link.playerId)) {
+      refreshSave(save, link.playerId, read);
+      return;
+    }
+    // A different game: a new file in the save folder, or another file picked on Refresh.
+    const note = why === 'auto' ? 'Found a new game in the save folder.' : why === 'refresh' ? 'That save is a different game, so it replaced the map.' : undefined;
+    if (humans.length === 1) applySave(save, humans[0].id, read, note);
+    else {
+      setError(null);
+      setPendingSave({ save, name: read.stamp.name, read, note });
     }
   };
 
-  const applySave = (save: RawSave, playerId: number, name: string) => {
+  const refreshSave = (save: RawSave, playerId: number, read: SaveRead) => {
+    const link = sync.link!;
     try {
-      const r = toGameState(save, playerId, name);
+      const r = toGameState(save, playerId, read.stamp.name);
+      refreshState((prev) => mergeRefresh(prev, link.incomeEstimate, r.state), r.state.cities.length);
+      sync.linked(makeLink(read.kind, read.stamp, save, playerId, r.incomeEstimate), read);
+    } catch (e) {
+      setError(`Couldn't use that save. (Details: ${e instanceof Error ? e.message : String(e)})`);
+    }
+  };
+
+  const applySave = (save: RawSave, playerId: number, read: SaveRead, note?: string) => {
+    try {
+      const r = toGameState(save, playerId, read.stamp.name);
       const cur = income(currentLayout(r.state), r.state.width, r.state.height).total;
       replaceState(
         r.state,
         [
+          note,
           `Loaded turn ${save.header.currentTurn}: ${plural(r.state.cities.length, 'city', 'cities')}.`,
           r.hiddenTiles ? `${plural(r.hiddenTiles, 'tile')} you haven't explored ${r.hiddenTiles === 1 ? 'is' : 'are'} hidden.` : '',
           `Your markets make ${cur}★ now.`,
@@ -161,7 +202,10 @@ export default function App() {
         ]
           .filter(Boolean)
           .join(' '),
+        true,
+        true,
       );
+      sync.linked(makeLink(read.kind, read.stamp, save, playerId, r.incomeEstimate), read);
     } catch (e) {
       setPendingSave(null);
       setError(`Couldn't use that save. (Details: ${e instanceof Error ? e.message : String(e)})`);
@@ -231,7 +275,7 @@ export default function App() {
             onChange={(e) => {
               const f = e.target.files?.[0];
               e.target.value = '';
-              if (f) loadSaveFile(f);
+              if (f) sync.fromInput(f);
             }}
           />
           <input
@@ -245,9 +289,7 @@ export default function App() {
               if (f) loadJson(f);
             }}
           />
-          <button type="button" className="accent" title="Read a .state save file from Polytopia" onClick={() => saveInput.current?.click()}>
-            Load game save
-          </button>
+          <LoadSave sync={sync} />
           <button type="button" title="Open a map .json file you downloaded before" onClick={() => jsonInput.current?.click()}>
             Open map file
           </button>
@@ -264,11 +306,12 @@ export default function App() {
         </div>
       </header>
 
+      <SyncBar sync={sync} planStale={stale} onSolve={canSolve && !busy ? () => opt.solve(state, goal, stateKey) : null} />
       {pendingSave && (
         <div className="banner" role="status">
-          This save has more than one human player. Who are you?
+          {pendingSave.note ? `${pendingSave.note} ` : ''}This save has more than one human player. Who are you?
           {humanPlayers(pendingSave.save).map((p) => (
-            <button key={p.id} type="button" className="accent" onClick={() => applySave(pendingSave.save, p.id, pendingSave.name)}>
+            <button key={p.id} type="button" className="accent" onClick={() => applySave(pendingSave.save, p.id, pendingSave.read, pendingSave.note)}>
               {p.name || `Player ${p.id}`}
             </button>
           ))}
