@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { readPref, writePref } from '../model/prefs';
 import { parseStateFile, type RawSave } from '../parse/stateFile';
-import { findCurrent, type Found, fsAccess, loadStored, observe, permission, pickFile, pickFolder, type Source, saveStored, type StoredSource } from './saveSource';
+import { findCurrent, type Found, fsAccess, loadStored, observe, permission, pickFolder, type Source, saveStored, type StoredSource } from './saveSource';
 import { changed, type FileStamp, generationGate, type LinkedSave, type SyncWhy, withRetry } from './saveSync';
 
 export type { SyncWhy } from './saveSync';
@@ -35,6 +35,7 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 const parse = async (f: File) => parseStateFile(new Uint8Array(await f.arrayBuffer()));
 const detail = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const domName = (e: unknown) => (e instanceof DOMException ? e.name : '');
+const FOLDER_REFUSED = 'No folder was loaded. If you picked one and nothing happened, your browser refused it: use Choose one file instead.';
 const NO_GAME = 'No game in this folder right now. The next game you play loads here by itself.';
 const notASave = (e: unknown) => `Couldn't read that save file. Make sure it's a .state file from the game's save folder. (Details: ${detail(e)})`;
 
@@ -243,18 +244,12 @@ export function useSaveSync(opts: Options) {
     /** A file or folder from before that isn't the map on screen now. */
     reopenable: !link && stored ? stored : null,
 
-    pickFile: async () => {
-      try {
-        const src = await pickFile(sourceRef.current?.handle ?? stored?.handle);
-        if (src) await readFrom(src, 'load');
-      } catch (e) {
-        optsRef.current.onLoadError(problemFor(e, undefined));
-      }
-    },
     pickFolder: async () => {
       try {
         const src = await pickFolder(sourceRef.current?.handle ?? stored?.handle);
-        if (src) await readFrom(src, 'load');
+        // Chrome reports a folder it refuses the same way as a cancel, so say what to try.
+        if (!src) optsRef.current.onLoadError(FOLDER_REFUSED);
+        else await readFrom(src, 'load');
       } catch (e) {
         optsRef.current.onLoadError(problemFor(e, undefined));
       }

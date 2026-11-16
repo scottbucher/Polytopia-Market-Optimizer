@@ -41,21 +41,6 @@ export const canObserve = typeof w.FileSystemObserver === 'function';
 
 const isAbort = (e: unknown) => e instanceof DOMException && e.name === 'AbortError';
 
-/** Opens the file picker. Null if the user cancelled. */
-export async function pickFile(startIn?: AnyHandle): Promise<Source | null> {
-  try {
-    const [handle] = await w.showOpenFilePicker!({
-      id: 'polytopia-save',
-      ...(startIn ? { startIn } : {}),
-      types: [{ description: 'Polytopia save', accept: { 'application/octet-stream': ['.state'] } }],
-    });
-    return handle ? { kind: 'file', handle } : null;
-  } catch (e) {
-    if (isAbort(e)) return null;
-    throw e;
-  }
-}
-
 export async function pickFolder(startIn?: AnyHandle): Promise<Source | null> {
   try {
     const handle = await w.showDirectoryPicker!({ id: 'polytopia-saves', mode: 'read', ...(startIn ? { startIn } : {}) });

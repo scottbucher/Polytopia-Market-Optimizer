@@ -100,7 +100,7 @@ export function LoadSave({ sync }: { sync: SaveSync }) {
               <button type="button" className="accent" onClick={act(sync.pickFolder)}>
                 Choose save folder
               </button>
-              <button type="button" onClick={act(sync.pickFile)}>
+              <button type="button" onClick={act(() => sync.openInput('load'))}>
                 Choose one file
               </button>
             </>
