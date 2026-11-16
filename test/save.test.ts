@@ -21,4 +21,18 @@ describe.skipIf(!FIXTURE)('real save file', () => {
     expect(out.result).not.toBeNull();
     expect(out.ms).toBeLessThan(10000);
   });
+
+  it('reads the turn and city levels, and plans with level-ups', () => {
+    const save = parseStateFile(new Uint8Array(readFileSync(FIXTURE!)));
+    const r = toGameState(save, humanPlayers(save)[0].id);
+    expect(r.state.turn).toBe(save.header.currentTurn);
+    for (const c of r.state.cities) {
+      expect(c.level).toBeGreaterThanOrEqual(1);
+      expect(c.population).toBeGreaterThanOrEqual(0);
+      expect(c.population).toBeLessThanOrEqual(c.level!);
+    }
+    const out = runOptimizer(r.state, { kind: 'best-by', turns: 12 });
+    expect(out.result).not.toBeNull();
+    expect(out.ms).toBeLessThan(10000);
+  });
 });

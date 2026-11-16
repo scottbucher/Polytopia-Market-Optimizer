@@ -61,7 +61,7 @@ export function parseJson(text: string): GameState {
   (Array.isArray(s.cities) ? s.cities : []).forEach((c, i) => {
     if (!c || !Number.isInteger(c.x) || !Number.isInteger(c.y) || c.x < 0 || c.y < 0 || c.x >= w! || c.y >= h!) return;
     newIndex.set(i, cities.length);
-    cities.push({ name: typeof c.name === 'string' ? c.name : `City ${cities.length + 1}`, x: c.x, y: c.y });
+    cities.push({ name: typeof c.name === 'string' ? c.name : `City ${cities.length + 1}`, x: c.x, y: c.y, ...cityGrowth(c) });
   });
   const tiles: Tile[] = s.tiles.map((t) => {
     const city = t?.city;
@@ -89,9 +89,20 @@ export function parseJson(text: string): GameState {
     allowGrow: typeof ss.allowGrow === 'boolean' ? ss.allowGrow : d.allowGrow,
     allowDestroy: typeof ss.allowDestroy === 'boolean' ? ss.allowDestroy : d.allowDestroy,
     allowNewTech: typeof ss.allowNewTech === 'boolean' ? ss.allowNewTech : d.allowNewTech,
+    ...(ss.cityUpgrades === false && { cityUpgrades: false }),
     costs,
   };
-  return { width: w!, height: h!, tiles, cities, settings, source: typeof s.source === 'string' ? s.source : undefined };
+  const turn = Number.isInteger(s.turn) && s.turn! >= 0 && s.turn! <= 100_000 ? s.turn : undefined;
+  return { width: w!, height: h!, tiles, cities, settings, source: typeof s.source === 'string' ? s.source : undefined, ...(turn !== undefined && { turn }) };
+}
+
+/** A city's level and population, when they are known and make sense. */
+function cityGrowth(c: Partial<City>): Pick<City, 'level' | 'population'> {
+  const level = c.level;
+  if (!Number.isInteger(level) || level! < 1 || level! > 999) return {};
+  const pop = Number.isInteger(c.population) ? c.population! : 0;
+  // A city levels up once its population reaches level + 1.
+  return { level, population: Math.min(level!, Math.max(0, pop)) };
 }
 
 export function download(name: string, text: string) {

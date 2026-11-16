@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import { techName } from '../data/rules';
+import { turnNow } from '../model/goalPrefs';
 import type { GameState } from '../model/types';
 import type { Plan } from '../solver/exact';
 import type { GoalResult } from '../solver/goals';
 import type { Step } from '../solver/schedule';
-import { describeAction, plural, starText } from './describe';
+import { describeAction, describeLevelUp, plural, starText } from './describe';
 
 interface Props {
   state: GameState;
@@ -34,6 +35,9 @@ export function ResultsPanel({ state, result, frontier, currentIncome, selected,
   const finalIncome = result.schedule.finalIncome;
   const gain = finalIncome - currentIncome;
   const payback = gain > 0 ? Math.ceil(spend / gain) : null;
+  const now = turnNow(state);
+  const levelUps = steps.flatMap((x) => x.levelUps ?? []);
+  const { upgradeStars, upgradeIncome } = result.schedule;
 
   const byTurn = useMemo(() => {
     const m = new Map<number, { step: Step; n: number }[]>();
@@ -57,11 +61,17 @@ export function ResultsPanel({ state, result, frontier, currentIncome, selected,
           value={spend < 0 ? `+${-spend}★` : `${spend}★`}
           sub={techSteps.length ? `${techCost}★ of it on techs` : 'no new techs'}
         />
-        <Stat label="Pays for itself" value={payback === null ? '—' : `${payback} turns`} sub={steps.length ? (result.schedule.doneTurn === 0 ? 'all built this turn' : `last step in ${plural(result.schedule.doneTurn, 'turn')}`) : ''} />
+        <Stat label="Pays for itself" value={payback === null ? '—' : `${payback} turns`} sub={steps.length ? (result.schedule.doneTurn === 0 ? 'all built this turn' : `last step on turn ${now + result.schedule.doneTurn}`) : ''} />
       </div>
       {techSteps.length > 0 && (
         <p className="techs-line">
           Techs to research: {techSteps.map((x) => (x.action.kind === 'tech' ? techName(x.action.tech, state.settings.tribe) : '')).join(', ')}
+        </p>
+      )}
+      {levelUps.length > 0 && (
+        <p className="upgrades">
+          {levelUps.length === 1 ? 'A city upgrade' : `${levelUps.length} city upgrades`} on the way add{levelUps.length === 1 ? 's' : ''}{' '}
+          {[upgradeStars ? `${upgradeStars}★` : '', upgradeIncome ? `+${upgradeIncome}★ per turn (each level adds 1★ itself)` : ''].filter(Boolean).join(' and ')}: take the economic reward each time.
         </p>
       )}
       {result.skipped.length > 0 && (
@@ -81,7 +91,7 @@ export function ResultsPanel({ state, result, frontier, currentIncome, selected,
           {byTurn.map(([turn, items]) => (
             <li key={turn} className="turn">
               <div className="turn-head">
-                <span>{turn === 0 ? 'This turn' : `Turn +${turn}`}</span>
+                <span>{turn === 0 ? `Turn ${now} (this turn)` : `Turn ${now + turn}`}</span>
                 <span className="muted">{items[0].step.starsBefore}★ available</span>
               </div>
               <ul>
@@ -90,48 +100,57 @@ export function ResultsPanel({ state, result, frontier, currentIncome, selected,
                   const tile = step.action.kind === 'tech' ? null : step.action.tile;
                   const isDone = done.has(n);
                   return (
-                    <li
-                      key={n}
-                      className={`step${isDone ? ' done' : ''}`}
-                      onMouseEnter={() => onHoverTile(tile)}
-                      onMouseLeave={() => onHoverTile(null)}
-                    >
-                      <span className="check">
-                        <input
-                          type="checkbox"
-                          checked={isDone}
-                          aria-label={`Mark step ${n} done`}
-                          onChange={() => {
-                            const s = new Set(done);
-                            if (isDone) s.delete(n);
-                            else s.add(n);
-                            setDone(s);
-                          }}
-                        />
-                      </span>
-                      <button
-                        type="button"
-                        className="steprow"
-                        disabled={tile === null}
-                        title={tile === null ? undefined : 'Show on the map'}
-                        onFocus={() => onHoverTile(tile)}
-                        onBlur={() => onHoverTile(null)}
-                        onClick={() => tile !== null && onShowTile(tile)}
+                    <Fragment key={n}>
+                      <li
+                        className={`step${isDone ? ' done' : ''}`}
+                        onMouseEnter={() => onHoverTile(tile)}
+                        onMouseLeave={() => onHoverTile(null)}
                       >
-                        <span className="n" aria-hidden="true">
-                          {n}
+                        <span className="check">
+                          <input
+                            type="checkbox"
+                            checked={isDone}
+                            aria-label={`Mark step ${n} done`}
+                            onChange={() => {
+                              const s = new Set(done);
+                              if (isDone) s.delete(n);
+                              else s.add(n);
+                              setDone(s);
+                            }}
+                          />
                         </span>
-                        <span className="what">
-                          <span className="sr-only">Step {n}: </span>
-                          {d.title}
-                          {d.detail && <small>{d.detail}</small>}
-                        </span>
-                        <span className="cost">{starText(step.action.cost)}</span>
-                        <span className="after">
-                          <span className="sr-only">market income after this step </span>→ {step.incomeAfter}★<span className="unit"> per turn</span>
-                        </span>
-                      </button>
-                    </li>
+                        <button
+                          type="button"
+                          className="steprow"
+                          disabled={tile === null}
+                          title={tile === null ? undefined : 'Show on the map'}
+                          onFocus={() => onHoverTile(tile)}
+                          onBlur={() => onHoverTile(null)}
+                          onClick={() => tile !== null && onShowTile(tile)}
+                        >
+                          <span className="n" aria-hidden="true">
+                            {n}
+                          </span>
+                          <span className="what">
+                            <span className="sr-only">Step {n}: </span>
+                            {d.title}
+                            {d.detail && <small>{d.detail}</small>}
+                          </span>
+                          <span className="cost">{starText(step.action.cost)}</span>
+                          <span className="after">
+                            <span className="sr-only">market income after this step </span>→ {step.incomeAfter}★<span className="unit"> per turn</span>
+                          </span>
+                        </button>
+                      </li>
+                      {step.levelUps?.map((u) => (
+                        <li key={`${u.city}:${u.level}`} className="levelup">
+                          <span className="icon-up" aria-hidden="true">
+                            ▲
+                          </span>
+                          <span>{describeLevelUp(state, u)}</span>
+                        </li>
+                      ))}
+                    </Fragment>
                   );
                 })}
               </ul>

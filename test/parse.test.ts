@@ -79,11 +79,24 @@ describe('save file', () => {
     expect(at(2, 2).improvement).toBe('market');
     expect(at(3, 3)).toMatchObject({ improvement: 'other', city: null }); // their market is no use to you
     expect(at(4, 4)).toMatchObject({ improvement: 'other', city: null });
-    expect(r.state.cities).toEqual([{ name: 'Home', x: 1, y: 1 }]);
+    expect(r.state.cities).toEqual([{ name: 'Home', x: 1, y: 1, level: 1, population: 1 }]);
     expect(r.state.settings).toMatchObject({ stars: 9, baseIncome: 3, tribe: 'bardur' });
+    expect(r.state.turn).toBe(7);
     // nothing about the other player leaks into the state
     expect(JSON.stringify(r.state)).not.toMatch(/Their Town|Bot/);
     expect(r).not.toHaveProperty('hiddenResources');
+  });
+
+  it('reads the turn, city levels and the income your cities make', () => {
+    const tiles = world();
+    // Level 4 capital with 2 of the 5 population it needs, a Workshop and a Park (production 1 + 2).
+    tiles[1][1] = { ...tiles[1][1], level: 4, population: 2, production: 3, capitalOf: 1 };
+    const r = toGameState(parseStateFile(makeSave({ tiles, players: players([]), turn: 18 })), 1);
+    expect(r.state.turn).toBe(18);
+    expect(r.state.cities[0]).toMatchObject({ level: 4, population: 2 });
+    // level 4 + Workshop + Park + capital
+    expect(r.incomeEstimate).toBe(7);
+    expect(r.state.settings.baseIncome).toBe(7);
   });
 
   it('shows resources once you have the tech', () => {

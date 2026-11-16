@@ -754,6 +754,14 @@ details.panel[open] > summary {
   width: 7ch;
   min-width: 64px;
 }
+.goal .deadline {
+  display: inline;
+}
+.goal .deadline.warn {
+  display: block;
+  flex-basis: 100%;
+  color: var(--warn);
+}
 .toggles {
   border: none;
   padding: 0;
@@ -893,6 +901,21 @@ details.panel[open] > summary {
 .step .after .unit {
   font-size: var(--text-xs);
 }
+.levelup {
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  gap: var(--space-1);
+  font-size: 13px;
+  color: var(--muted);
+  padding: 2px var(--space-1) 4px 0;
+}
+.levelup .icon-up {
+  text-align: center;
+}
+.upgrades {
+  font-size: 13px;
+  margin: 10px 0 0;
+}
 .step.done .what {
   text-decoration: line-through;
   color: var(--muted);
@@ -964,7 +987,7 @@ details.panel[open] > summary {
 }
 .cities {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr));
   gap: 8px;
 }
 .cities label {
@@ -974,6 +997,29 @@ details.panel[open] > summary {
 }
 .cities input {
   flex: 1;
+}
+.city-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  align-items: center;
+}
+.city-row > label {
+  flex: 1 1 140px;
+}
+.city-growth {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  font-size: 13px;
+}
+.cities .pop {
+  gap: 2px;
+}
+.cities .pop input {
+  flex: none;
+  width: 5ch;
+  min-width: 48px;
 }
 .dot {
   width: 10px;

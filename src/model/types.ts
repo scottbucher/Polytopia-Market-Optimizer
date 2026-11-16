@@ -12,6 +12,10 @@ export interface City {
   name: string;
   x: number;
   y: number;
+  /** City level, when known (from a save, or typed in). */
+  level?: number;
+  /** Population toward the next level. */
+  population?: number;
 }
 
 export interface Settings {
@@ -28,6 +32,8 @@ export interface Settings {
   allowDestroy: boolean;
   /** Let the plan buy new techs. Off = only use techs you own. */
   allowNewTech: boolean;
+  /** Count the rewards of cities levelling up from the plan's population. Unset = on. */
+  cityUpgrades?: boolean;
   costs: CostTable;
 }
 
@@ -40,6 +46,8 @@ export interface GameState {
   settings: Settings;
   /** Free-form info about where the state came from (file name, turn). */
   source?: string;
+  /** The game's current turn. */
+  turn?: number;
 }
 
 export type Goal =

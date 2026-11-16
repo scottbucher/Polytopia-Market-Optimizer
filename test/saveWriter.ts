@@ -10,6 +10,10 @@ export interface FakeTile {
   improvement?: number; // 1 city, 50 market, ...
   cityName?: string;
   production?: number;
+  level?: number;
+  population?: number;
+  /** Player id whose capital this is. */
+  capitalOf?: number;
   seenBy?: number[];
   /** A unit stands here (optionally carrying a passenger). */
   unit?: { passenger?: boolean };
@@ -69,7 +73,7 @@ function block(w: W, version: number, turn: number, size: number, tiles: FakeTil
       w.u16(1); // climate
       w.u16(0); // altitude
       w.u8(t.owner ?? 0);
-      w.u8(0); // capital of
+      w.u8(t.capitalOf ?? 0); // capital of
       w.i32(t.ruling?.[0] ?? -1);
       w.i32(t.ruling?.[1] ?? -1);
       if (t.resource !== undefined) {
@@ -79,9 +83,9 @@ function block(w: W, version: number, turn: number, size: number, tiles: FakeTil
       if (t.improvement !== undefined) {
         w.u8(1);
         w.u16(t.improvement);
-        w.u16(1); // level
+        w.u16(t.level ?? 1); // level
         w.u16(0); // founded
-        w.u16(1); // population
+        w.u16(t.population ?? 1); // population
         w.u16(1); // total population
         w.u16(t.production ?? 0);
         w.u16(0); // base score
