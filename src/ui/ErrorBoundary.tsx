@@ -17,18 +17,17 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, { error: E
         <p>The page hit an error: {this.state.error.message}</p>
         <p>Your map is saved in this browser. You can reload and try again, or start over with the example map.</p>
         <div className="row">
-          <button type="button" onClick={() => location.reload()}>
+          <button type="button" className="accent" onClick={() => location.reload()}>
             Reload
           </button>
           <button
             type="button"
-            className="secondary"
             onClick={() => {
               clearLocal();
               location.reload();
             }}
           >
-            Start over
+            Start over (clears the map saved in this browser)
           </button>
         </div>
       </div>

@@ -4,7 +4,7 @@ import type { GameState } from '../model/types';
 import type { Plan } from '../solver/exact';
 import type { GoalResult } from '../solver/goals';
 import type { Step } from '../solver/schedule';
-import { describeAction, starText } from './describe';
+import { describeAction, plural, starText } from './describe';
 
 interface Props {
   state: GameState;
@@ -14,14 +14,15 @@ interface Props {
   selected: number;
   onSelect: (i: number) => void;
   onHoverTile: (t: number | null) => void;
-  ms: number;
+  /** A step was tapped or clicked: show its tile on the map. */
+  onShowTile: (t: number) => void;
   /** The map changed since this was solved: other plans can't be picked. */
   stale: boolean;
   /** A plan's build order is being worked out. */
   loading: boolean;
 }
 
-export function ResultsPanel({ state, result, frontier, currentIncome, selected, onSelect, onHoverTile, ms, stale, loading }: Props) {
+export function ResultsPanel({ state, result, frontier, currentIncome, selected, onSelect, onHoverTile, onShowTile, stale, loading }: Props) {
   const [done, setDone] = useState<Set<number>>(new Set());
   // A different plan or result starts with nothing ticked.
   useEffect(() => setDone(new Set()), [result]);
@@ -45,7 +46,7 @@ export function ResultsPanel({ state, result, frontier, currentIncome, selected,
 
   return (
     <section className={`results${stale ? ' stale' : ''}`}>
-      {stale && <p className="small warn stale-note">This plan is out of date: the map, settings or goal changed. Solve again to update it.</p>}
+      {stale && <p className="small note warn stale-note">Out of date: you changed the map, settings or goal. Press Solve again to update the plan.</p>}
       <p className={`summary${result.met ? '' : ' warn'}`} aria-live="polite">
         {result.summary}
       </p>
@@ -56,7 +57,7 @@ export function ResultsPanel({ state, result, frontier, currentIncome, selected,
           value={spend < 0 ? `+${-spend}★` : `${spend}★`}
           sub={techSteps.length ? `${techCost}★ of it on techs` : 'no new techs'}
         />
-        <Stat label="Pays for itself" value={payback === null ? '—' : `${payback} turns`} sub={steps.length ? `last step on turn ${result.schedule.doneTurn}` : ''} />
+        <Stat label="Pays for itself" value={payback === null ? '—' : `${payback} turns`} sub={steps.length ? (result.schedule.doneTurn === 0 ? 'all built this turn' : `last step in ${plural(result.schedule.doneTurn, 'turn')}`) : ''} />
       </div>
       {techSteps.length > 0 && (
         <p className="techs-line">
@@ -95,13 +96,11 @@ export function ResultsPanel({ state, result, frontier, currentIncome, selected,
                       onMouseEnter={() => onHoverTile(tile)}
                       onMouseLeave={() => onHoverTile(null)}
                     >
-                      <label>
+                      <span className="check">
                         <input
                           type="checkbox"
                           checked={isDone}
-                          aria-label={`Step ${n} done`}
-                          onFocus={() => onHoverTile(tile)}
-                          onBlur={() => onHoverTile(null)}
+                          aria-label={`Mark step ${n} done`}
                           onChange={() => {
                             const s = new Set(done);
                             if (isDone) s.delete(n);
@@ -109,16 +108,29 @@ export function ResultsPanel({ state, result, frontier, currentIncome, selected,
                             setDone(s);
                           }}
                         />
-                        <span className="n">{n}</span>
+                      </span>
+                      <button
+                        type="button"
+                        className="steprow"
+                        disabled={tile === null}
+                        title={tile === null ? undefined : 'Show on the map'}
+                        onFocus={() => onHoverTile(tile)}
+                        onBlur={() => onHoverTile(null)}
+                        onClick={() => tile !== null && onShowTile(tile)}
+                      >
+                        <span className="n" aria-hidden="true">
+                          {n}
+                        </span>
                         <span className="what">
+                          <span className="sr-only">Step {n}: </span>
                           {d.title}
                           {d.detail && <small>{d.detail}</small>}
                         </span>
                         <span className="cost">{starText(step.action.cost)}</span>
-                        <span className="after" title="Market income after this step">
-                          {step.incomeAfter}★/t
+                        <span className="after">
+                          <span className="sr-only">market income after this step </span>→ {step.incomeAfter}★<span className="unit"> per turn</span>
                         </span>
-                      </label>
+                      </button>
                     </li>
                   );
                 })}
@@ -146,11 +158,18 @@ export function ResultsPanel({ state, result, frontier, currentIncome, selected,
               {frontier.map((p, i) => (
                 <tr key={i} className={`${i === selected ? 'sel' : ''}${stale || loading ? ' off' : ''}`} onClick={() => !stale && !loading && onSelect(i)}>
                   <td>
-                    <button type="button" className="pickbtn" aria-pressed={i === selected} disabled={stale} aria-disabled={loading || undefined} aria-label={`Show the ${p.income}★ plan`}>
+                    <button
+                      type="button"
+                      className="pickbtn"
+                      aria-pressed={i === selected}
+                      disabled={stale}
+                      aria-disabled={loading || undefined}
+                      aria-label={p.changes.length === 0 ? 'Show building nothing' : `Show the ${p.income}★ plan`}
+                    >
                       {p.income}★
                     </button>
                   </td>
-                  <td>{p.cost}★</td>
+                  <td>{p.changes.length === 0 ? 'Build nothing' : `${p.cost}★`}</td>
                   <td>{p.techs.map((t) => techName(t, state.settings.tribe)).join(', ') || '—'}</td>
                 </tr>
               ))}
@@ -158,7 +177,6 @@ export function ResultsPanel({ state, result, frontier, currentIncome, selected,
           </table>
         </>
       )}
-      <p className="muted small">Solved in {ms} ms.</p>
     </section>
   );
 }

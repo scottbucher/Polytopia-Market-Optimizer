@@ -28,7 +28,7 @@ export function TechPicker({ owned, tribe, prices, onChange }: { owned: TechKey[
   };
   // A plain function, not a component: a component defined here would remount (and lose focus) on every render.
   const btn = (t: TechKey) => (
-    <button key={t} type="button" className={`tech${has.has(t) ? ' on' : ''}`} onClick={() => toggle(t)} aria-pressed={has.has(t)} title={has.has(t) ? 'Owned' : `Costs ${prices(t)}★ now`}>
+    <button key={t} type="button" className={`tech${has.has(t) ? ' on' : ''}`} onClick={() => toggle(t)} aria-pressed={has.has(t)} aria-label={`${techName(t, tribe)}, ${has.has(t) ? 'owned' : `costs ${prices(t)}★`}`} title={has.has(t) ? 'Owned' : `Costs ${prices(t)}★ now`}>
       <span>{techName(t, tribe)}</span>
       {!has.has(t) && <small>{prices(t)}★</small>}
     </button>
