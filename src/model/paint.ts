@@ -56,6 +56,7 @@ export function applyTool(st: GameState, tool: Tool, i: number): GameState {
     }
     case 'territory':
       if (t.improvement === 'city') return st;
+      if (tool.city !== null && (tool.city < 0 || tool.city >= st.cities.length)) return st;
       t.city = tool.city;
       return st;
     case 'city': {

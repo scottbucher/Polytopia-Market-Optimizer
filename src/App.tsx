@@ -63,6 +63,7 @@ export default function App() {
   /** Replace the whole map (new, example, loaded): clears results, banners and the screenshot. */
   const replaceState = (next: GameState, message: string | null) => {
     setState(next);
+    setTool({ kind: 'look' }); // a territory tool may name a city the new map doesn't have
     opt.reset();
     setPendingSave(null);
     setError(null);
@@ -136,7 +137,7 @@ export default function App() {
     (opt.solved && shown
       ? shown.schedule.finalIncome === shown.plan.income
         ? opt.solved.frontier.plans.indexOf(shown.plan)
-        : opt.solved.frontier.plans.findIndex((p) => p.income === shown.schedule.finalIncome)
+        : opt.solved.frontier.plans.findIndex((p) => p.income === shown.schedule.finalIncome && (p.changes.length > 0) === (shown.bundles.length > 0))
       : -1);
 
   const overlay: Overlay | null = useMemo(() => {

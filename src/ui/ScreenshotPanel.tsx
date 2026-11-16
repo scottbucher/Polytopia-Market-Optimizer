@@ -37,7 +37,10 @@ export function ScreenshotPanel({ state, view, backdrop, setBackdrop, tileOpacit
       setTileOpacity(0.45);
       setMsg('Line the grid up with the screenshot, paint one or two tiles of each terrain, then press Guess terrain. Only tiles still marked Unexplored are guessed.');
     };
-    img.onerror = () => setMsg("That file couldn't be opened as an image.");
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      setMsg("That file couldn't be opened as an image.");
+    };
     img.src = url;
   };
 

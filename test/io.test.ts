@@ -149,3 +149,11 @@ describe('painting tools', () => {
     expect(s.tiles[1 * 6 + 3].city).toBe(0);
   });
 });
+
+describe('painting tools: bad input', () => {
+  it('territory for a city that does not exist does nothing', () => {
+    const s = makeState('...\n.C.\n...');
+    applyTool(s, { kind: 'territory', city: 2 }, 0);
+    expect(s.tiles[0].city).toBe(0);
+  });
+});
