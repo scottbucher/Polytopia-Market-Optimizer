@@ -14,7 +14,7 @@ import { income } from './solver/income';
 import { techPrice } from './solver/options';
 import { layoutAfter } from './solver/schedule';
 import { plural, where } from './ui/describe';
-import { type Backdrop, cityColor, GAME_VIEW, isGameView, loadView, MapView, type Overlay, saveView, type View } from './ui/MapView';
+import { type Backdrop, GAME_VIEW, isGameView, loadView, MapView, type Overlay, saveView, type View } from './ui/MapView';
 import { CityRow } from './ui/CityRow';
 import { GoalPicker, SolveHint } from './ui/GoalPicker';
 import { NumberField } from './ui/NumberField';
