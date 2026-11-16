@@ -43,6 +43,9 @@ describe('pinned rules and tables', () => {
     expect(builds(makeState(',C'), 0).farm).toEqual([5, 'farming']);
     expect(builds(makeState('MC'), 0)).toEqual({ null: [0, ''], mine: [5, 'mining'] });
     expect(builds(makeState('mC'), 0)).toEqual({ null: [0, ''] });
+    const sea = makeState('~C', { tribe: 'aquarion' });
+    sea.tiles[0] = { ...sea.tiles[0], terrain: 'ocean', resource: 'aquacrop' };
+    expect(builds(sea, 0).aquafarm).toEqual([5, 'ramming']);
     const d = withBuildings(makeState('.C', { allowDestroy: true, costs: { ...makeState('.').settings.costs, destroy: 2 } }), { 0: 'farm' });
     expect(tileOptions(d, 0).find((o) => o.ops.join() === 'destroy' && !o.build)).toMatchObject({ cost: 2, techs: ['chivalry'] });
   });

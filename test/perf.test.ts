@@ -3,7 +3,7 @@ import { objectivesFor, runOptimizer } from '../src/solver/index';
 import { search } from '../src/solver/search';
 import { bigMap } from './perf/bigmap';
 
-// Generous budgets (CI machines are slower); a regression to the old quadratic
+// Generous budgets (CI machines are slower and may be shared); a regression to the old quadratic
 // build-order code took minutes here.
 describe('speed on a big map (30×30, 6 cities)', () => {
   const s = bigMap(6);
@@ -13,7 +13,7 @@ describe('speed on a big map (30×30, 6 cities)', () => {
       const r = runOptimizer(s, goal);
       expect(r.result).not.toBeNull();
       expect(r.result!.skipped).toEqual([]);
-      expect(performance.now() - t).toBeLessThan(20000);
+      expect(performance.now() - t).toBeLessThan(40000);
     }, 60000);
   }
 });

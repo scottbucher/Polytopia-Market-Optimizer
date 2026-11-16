@@ -113,8 +113,10 @@ describe('painting tools', () => {
     const s = makeState('...\n.C.\n...');
     paint(s, { kind: 'resource', v: 'crop' }, 0, 0);
     expect(s.tiles[0].resource).toBe('crop');
+    s.tiles[0].improvement = 'farm';
     paint(s, { kind: 'resource', v: 'crop' }, 0, 0);
     expect(s.tiles[0].resource).toBe('none');
+    expect(s.tiles[0].improvement).toBe('none'); // no crop, no farm
     paint(s, { kind: 'resource', v: 'metal' }, 0, 0);
     expect(s.tiles[0]).toMatchObject({ terrain: 'mountain', resource: 'metal' });
   });

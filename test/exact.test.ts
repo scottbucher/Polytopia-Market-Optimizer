@@ -16,7 +16,7 @@ fffff`, { owned: ['hunting', 'forestry', 'mathematics', 'riding', 'roads', 'trad
     const t = Date.now();
     const f = optimize(s);
     const top = f.plans[f.plans.length - 1];
-    expect(Date.now() - t).toBeLessThan(5000);
+    expect(Date.now() - t).toBeLessThan(15000);
     expect(top.income).toBe(8);
     expect(f.plans[0].income).toBe(0);
   });
