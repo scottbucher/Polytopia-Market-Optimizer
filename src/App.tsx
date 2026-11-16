@@ -30,15 +30,44 @@ const TERRAINS: [Terrain, string][] = [
 
 const BUILD_TOOLS: (BuildingKind | 'none' | 'other')[] = [...BUILDING_KINDS, 'other', 'none'];
 
+type GoalKind = Goal['kind'];
+type GoalsByKind = { [K in GoalKind]: Extract<Goal, { kind: K }> };
+
+const TERRAIN_KEYS: Record<string, Terrain> = { '1': 'field', '2': 'forest', '3': 'mountain', '4': 'water', '5': 'ocean', '6': 'unknown' };
+
+const FIRST_RUN =
+  'This is an example map. Press Find the best layout to see a plan, or start your own: Load game save reads your game, New map lets you paint one.';
+
 export default function App() {
-  const [state, setState] = useState<GameState>(() => loadLocal() ?? exampleState());
+  const [initial] = useState(() => {
+    const saved = loadLocal();
+    return { state: saved ?? exampleState(), firstRun: !saved };
+  });
+  const [state, setState] = useState<GameState>(initial.state);
   const [tool, setTool] = useState<Tool>({ kind: 'look' });
   const [view, setView] = useState<View>({ rot: 0, flip: false });
-  const [goal, setGoal] = useState<Goal>({ kind: 'max' });
+  // One goal per kind, so switching goal type and back keeps the numbers you typed.
+  const [goalKind, setGoalKind] = useState<GoalKind>('max');
+  const [goals, setGoals] = useState<GoalsByKind>(() => ({
+    max: { kind: 'max' },
+    income: { kind: 'income', income: Math.max(1, income(currentLayout(initial.state), initial.state.width, initial.state.height).total + 4), turns: 10 },
+    bank: { kind: 'bank', stars: 30, turns: 8 },
+    'best-by': { kind: 'best-by', turns: 15 },
+  }));
+  const goal: Goal = goals[goalKind];
+  const editGoal = (g: Goal) => setGoals((m) => ({ ...m, [g.kind]: g }));
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(initial.firstRun ? FIRST_RUN : null);
+  // The map a replace (new, example, opened file) threw away, for one step of undo.
+  const [undo, setUndo] = useState<GameState | null>(null);
+  // Changes whenever the whole map is replaced, to reset panels that belong to the old one.
+  const [mapId, setMapId] = useState(0);
+  // Last painted tile: flashed on the map and announced to screen readers.
+  const [lastPaint, setLastPaint] = useState<{ tile: number; n: number } | null>(null);
   const [hover, setHover] = useState<number | null>(null);
   const [stepHover, setStepHover] = useState<number | null>(null);
+  // A step tapped in the build order stays highlighted on the map until the next tap.
+  const [pinTile, setPinTile] = useState<number | null>(null);
   const [pendingSave, setPendingSave] = useState<{ save: RawSave; name: string } | null>(null);
   const [backdrop, setBackdrop] = useState<Backdrop | null>(null);
   const [tileOpacity, setTileOpacity] = useState(1);
@@ -61,8 +90,11 @@ export default function App() {
   const setSettings = (patch: Partial<GameState['settings']>) => update((st) => ({ ...st, settings: { ...st.settings, ...patch } }));
 
   /** Replace the whole map (new, example, loaded): clears results, banners and the screenshot. */
-  const replaceState = (next: GameState, message: string | null) => {
+  const replaceState = (next: GameState, message: string | null, undoable = true) => {
+    setUndo(undoable ? state : null);
     setState(next);
+    setMapId((n) => n + 1);
+    setLastPaint(null);
     setTool({ kind: 'look' }); // a territory tool may name a city the new map doesn't have
     opt.reset();
     setPendingSave(null);
@@ -70,16 +102,32 @@ export default function App() {
     setNotice(message);
     setHover(null);
     setStepHover(null);
+    setPinTile(null);
     if (backdrop) URL.revokeObjectURL(backdrop.href);
     setBackdrop(null);
     setTileOpacity(1);
+    if (goalKind === 'income') editGoal({ ...goals.income, income: Math.max(1, income(currentLayout(next), next.width, next.height).total + 4) });
   };
 
   const paint = (i: number, first: boolean) => {
+    if (first) setPinTile(null);
     if (tool.kind === 'look' || i < 0 || i >= state.tiles.length) return;
     // Cities and resources toggle, so dragging would flip them on every tile it passes.
     if (!first && (tool.kind === 'city' || tool.kind === 'resource')) return;
     update((st) => applyTool(st, tool, i));
+    setLastPaint((p) => ({ tile: i, n: (p?.n ?? 0) + 1 }));
+  };
+
+  const pickTool = (t: Tool) => {
+    setTool(t);
+    setLastPaint(null);
+  };
+  const onToolKey = (key: string) => {
+    const k = key.toLowerCase();
+    if (TERRAIN_KEYS[k]) pickTool({ kind: 'terrain', v: TERRAIN_KEYS[k] });
+    else if (k === 'm') pickTool({ kind: 'look' });
+    else return false;
+    return true;
   };
 
   // ---------- loading ----------
@@ -94,7 +142,7 @@ export default function App() {
       if (humans.length === 1) applySave(save, humans[0].id, f.name);
       else setPendingSave({ save, name: f.name });
     } catch (e) {
-      setError(`Couldn't read that save file. ${e instanceof Error ? e.message : String(e)} Make sure it is a .state file from the game's save folder.`);
+      setError(`Couldn't read that save file. Make sure it's a .state file from the game's save folder. (Details: ${e instanceof Error ? e.message : String(e)})`);
     }
   };
 
@@ -116,7 +164,7 @@ export default function App() {
       );
     } catch (e) {
       setPendingSave(null);
-      setError(`Couldn't use that save. ${e instanceof Error ? e.message : String(e)}`);
+      setError(`Couldn't use that save. (Details: ${e instanceof Error ? e.message : String(e)})`);
     }
   };
 
@@ -154,13 +202,21 @@ export default function App() {
     return { layout, steps, removed, marketIncome: income(layout, state.width, state.height).markets };
   }, [shown, showPlan, state, stale]);
 
-  const hoverTile = stepHover ?? hover;
+  const hoverTile = stepHover ?? hover ?? pinTile;
   const hoverInfo = hover !== null ? describeTile(state, hover) : null;
   const unsupported = !tribe.hasMarket;
   const busy = opt.busy === 'solve';
+  // Tiles a market could use: explored land inside your territory.
+  const mappedTiles = useMemo(() => state.tiles.filter((t) => t.city !== null && t.terrain !== 'unknown').length, [state.tiles]);
+  const canSolve = !unsupported && state.cities.length > 0 && mappedTiles > 0;
+  const painted = lastPaint ? describeTile(state, lastPaint.tile) : null;
+  const [coarse] = useState(() => typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches);
 
   return (
     <div className="app">
+      <a className="skip" href="#goal-label">
+        Skip to goal and solve
+      </a>
       <header>
         <div className="brand">
           <h1>Market Planner</h1>
@@ -189,21 +245,21 @@ export default function App() {
               if (f) loadJson(f);
             }}
           />
-          <button type="button" onClick={() => saveInput.current?.click()}>
-            Open save file
+          <button type="button" className="accent" title="Read a .state save file from Polytopia" onClick={() => saveInput.current?.click()}>
+            Load game save
           </button>
-          <button type="button" className="secondary" onClick={() => jsonInput.current?.click()}>
-            Open map
+          <button type="button" title="Open a map .json file you downloaded before" onClick={() => jsonInput.current?.click()}>
+            Open map file
           </button>
-          <button type="button" className="secondary" onClick={() => download('polytopia-map.json', mapJson(state))}>
-            Save map
+          <button type="button" title="Save this map as a .json file you can open later" onClick={() => download('polytopia-map.json', mapJson(state))}>
+            Download map
           </button>
           <NewMap
             onCreate={(w, h) => {
-              replaceState(blankState(w, h), null);
+              replaceState(blankState(w, h), `Started a blank ${w}×${h} map. Paint the terrain first, then add your cities.`);
               setTool({ kind: 'terrain', v: 'field' });
             }}
-            onExample={() => replaceState(exampleState(), null)}
+            onExample={() => replaceState(exampleState(), 'Opened the example map.')}
           />
         </div>
       </header>
@@ -212,7 +268,7 @@ export default function App() {
         <div className="banner" role="status">
           This save has more than one human player. Who are you?
           {humanPlayers(pendingSave.save).map((p) => (
-            <button key={p.id} type="button" onClick={() => applySave(pendingSave.save, p.id, pendingSave.name)}>
+            <button key={p.id} type="button" className="accent" onClick={() => applySave(pendingSave.save, p.id, pendingSave.name)}>
               {p.name || `Player ${p.id}`}
             </button>
           ))}
@@ -224,9 +280,28 @@ export default function App() {
       {notice && (
         <div className="banner info" role="status">
           <span>{notice}</span>
-          <button type="button" className="link" onClick={() => setNotice(null)}>
-            Dismiss
-          </button>
+          <span className="banner-actions">
+            {undo && (
+              <button
+                type="button"
+                onClick={() => {
+                  replaceState(undo, 'Your previous map is back.', false);
+                }}
+              >
+                Undo
+              </button>
+            )}
+            <button
+              type="button"
+              className="link"
+              onClick={() => {
+                setNotice(null);
+                setUndo(null);
+              }}
+            >
+              Dismiss
+            </button>
+          </span>
         </div>
       )}
       {error && (
@@ -240,25 +315,25 @@ export default function App() {
 
       <main>
         <section className="mapcol">
-          <div className="toolbar" role="toolbar" aria-label="Map tools">
-            <ToolBtn active={tool.kind === 'look'} onClick={() => setTool({ kind: 'look' })}>
-              Look
+          <div className="toolbar" role="group" aria-label="Map tools">
+            <ToolBtn active={tool.kind === 'look'} onClick={() => pickTool({ kind: 'look' })} title="Look around and scroll without changing the map (M)">
+              Move
             </ToolBtn>
             <span className="sep" />
             {TERRAINS.map(([v, label]) => (
-              <ToolBtn key={v} active={tool.kind === 'terrain' && tool.v === v} onClick={() => setTool({ kind: 'terrain', v })} swatch={`t-${v}`}>
+              <ToolBtn key={v} active={tool.kind === 'terrain' && tool.v === v} onClick={() => pickTool({ kind: 'terrain', v })} swatch={`t-${v}`} title={`Paint ${label.toLowerCase()} (${TERRAINS.findIndex((x) => x[0] === v) + 1})`}>
                 {label}
               </ToolBtn>
             ))}
             <span className="sep" />
-            <ToolBtn active={tool.kind === 'resource' && tool.v === 'crop'} onClick={() => setTool({ kind: 'resource', v: 'crop' })}>
+            <ToolBtn active={tool.kind === 'resource' && tool.v === 'crop'} onClick={() => pickTool({ kind: 'resource', v: 'crop' })}>
               Crop
             </ToolBtn>
-            <ToolBtn active={tool.kind === 'resource' && tool.v === 'metal'} onClick={() => setTool({ kind: 'resource', v: 'metal' })}>
+            <ToolBtn active={tool.kind === 'resource' && tool.v === 'metal'} onClick={() => pickTool({ kind: 'resource', v: 'metal' })}>
               Metal
             </ToolBtn>
             {tribe.hasAquafarm && (
-              <ToolBtn active={tool.kind === 'resource' && tool.v === 'aquacrop'} onClick={() => setTool({ kind: 'resource', v: 'aquacrop' })}>
+              <ToolBtn active={tool.kind === 'resource' && tool.v === 'aquacrop'} onClick={() => pickTool({ kind: 'resource', v: 'aquacrop' })}>
                 Water crop
               </ToolBtn>
             )}
@@ -266,7 +341,7 @@ export default function App() {
             <select
               aria-label="Building"
               value={tool.kind === 'building' ? tool.v : ''}
-              onChange={(e) => setTool({ kind: 'building', v: e.target.value as BuildingKind | 'none' | 'other' })}
+              onChange={(e) => pickTool({ kind: 'building', v: e.target.value as BuildingKind | 'none' | 'other' })}
             >
               <option value="" disabled>
                 Building…
@@ -277,13 +352,13 @@ export default function App() {
                 </option>
               ))}
             </select>
-            <ToolBtn active={tool.kind === 'city'} onClick={() => setTool({ kind: 'city' })}>
+            <ToolBtn active={tool.kind === 'city'} onClick={() => pickTool({ kind: 'city' })} title="Tap a tile to add or remove a city">
               City
             </ToolBtn>
             <select
               aria-label="Territory"
               value={tool.kind === 'territory' ? String(tool.city) : ''}
-              onChange={(e) => setTool({ kind: 'territory', city: e.target.value === 'null' ? null : Number(e.target.value) })}
+              onChange={(e) => pickTool({ kind: 'territory', city: e.target.value === 'null' ? null : Number(e.target.value) })}
             >
               <option value="" disabled>
                 Territory…
@@ -297,12 +372,18 @@ export default function App() {
             </select>
             <span className="grow" />
             <button type="button" className="icon" title="Rotate map" aria-label="Rotate map" onClick={() => setView({ ...view, rot: ((view.rot + 1) % 4) as View['rot'] })}>
-              ⟳
+              <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+                <path d="M13 8a5 5 0 1 1-1.6-3.7M13 2.5v3h-3" />
+              </svg>
             </button>
             <button type="button" className="icon" title="Mirror map" aria-label="Mirror map" onClick={() => setView({ ...view, flip: !view.flip })}>
-              ⇋
+              <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+                <path d="M8 1.5v13" />
+                <path className="solid" d="M6 4 2 8l4 4V4zM10 4l4 4-4 4V4z" />
+              </svg>
             </button>
           </div>
+          {coarse && tool.kind !== 'look' && <p className="paint-hint small">Painting: dragging paints tiles. Choose Move to scroll the map.</p>}
           <div className="mapwrap">
             <MapView
               key={`${state.width}x${state.height}`}
@@ -315,11 +396,14 @@ export default function App() {
               backdrop={backdrop}
               tileOpacity={tileOpacity}
               editing={tool.kind !== 'look'}
+              flash={lastPaint}
+              onToolKey={onToolKey}
             />
           </div>
           <div className="mapfoot">
-            <span className="muted small">
-              {hoverInfo ?? `${state.source ?? ''} · ${state.width}×${state.height}`}
+            <span className="muted small">{hoverInfo ?? [state.source, `${state.width}×${state.height}`].filter(Boolean).join(' · ')}</span>
+            <span className="sr-only" aria-live="polite">
+              {painted ? `Painted ${painted}` : ''}
             </span>
             {shown && !stale && (
               <label className="small">
@@ -327,9 +411,10 @@ export default function App() {
               </label>
             )}
           </div>
-          <details className="panel">
+          <details className="panel shot-panel">
             <summary>Import from a screenshot</summary>
             <ScreenshotPanel
+              key={mapId}
               state={state}
               view={view}
               backdrop={backdrop}
@@ -397,49 +482,49 @@ export default function App() {
               </label>
             </div>
             {tribe.note && <p className="small warn">{tribe.note}</p>}
-            <p className="muted small">Tech costs use {plural(s.cityCount, 'city', 'cities')}. Tap a tech to mark it owned.</p>
+            <p className="muted small">Select the techs you already have. Prices are for {plural(s.cityCount, 'city', 'cities')}.</p>
             <TechPicker owned={s.owned} tribe={s.tribe} prices={(t) => techPrice(state, t)} onChange={(owned) => setSettings({ owned })} />
           </section>
 
           <section className="panel open">
             <h2 id="goal-label">What do you want?</h2>
             <div className="goals" role="radiogroup" aria-labelledby="goal-label">
-              <GoalOpt checked={goal.kind === 'max'} onSelect={() => setGoal({ kind: 'max' })} title="Most market income" desc="Highest stars per turn, at the lowest cost for that income." />
+              <GoalOpt checked={goal.kind === 'max'} onSelect={() => setGoalKind('max')} title="Most market income" desc="Highest stars per turn, at the lowest cost for that income." />
               <GoalOpt
                 checked={goal.kind === 'income'}
-                onSelect={() => setGoal({ kind: 'income', income: Math.max(1, curIncome + 4), turns: 10 })}
+                onSelect={() => setGoalKind('income')}
                 title="Reach an income"
                 desc="Get to a market income as soon as possible."
               >
                 {goal.kind === 'income' && (
                   <span className="inline">
-                    <NumberField aria-label="Market income to reach" min={1} max={999} value={goal.income} onChange={(v) => setGoal({ ...goal, income: v })} />★ per turn from markets within
-                    <NumberField aria-label="Within how many turns" min={0} max={200} value={goal.turns} onChange={(v) => setGoal({ ...goal, turns: v })} /> turns
+                    <NumberField aria-label="Market income to reach" min={1} max={999} value={goal.income} onChange={(v) => editGoal({ ...goal, income: v })} />★ per turn from markets within
+                    <NumberField aria-label="Within how many turns" min={0} max={200} value={goal.turns} onChange={(v) => editGoal({ ...goal, turns: v })} /> turns
                   </span>
                 )}
               </GoalOpt>
               <GoalOpt
                 checked={goal.kind === 'bank'}
-                onSelect={() => setGoal({ kind: 'bank', stars: 30, turns: 8 })}
+                onSelect={() => setGoalKind('bank')}
                 title="Save up stars"
                 desc="Have a number of stars on hand by a deadline, investing only where it pays off in time."
               >
                 {goal.kind === 'bank' && (
                   <span className="inline">
-                    <NumberField aria-label="Stars to have" min={0} max={9999} value={goal.stars} onChange={(v) => setGoal({ ...goal, stars: v })} />★ by turn +
-                    <NumberField aria-label="Turns from now" min={0} max={200} value={goal.turns} onChange={(v) => setGoal({ ...goal, turns: v })} />
+                    <NumberField aria-label="Stars to have" min={0} max={9999} value={goal.stars} onChange={(v) => editGoal({ ...goal, stars: v })} />★ within
+                    <NumberField aria-label="Turns from now" min={0} max={200} value={goal.turns} onChange={(v) => editGoal({ ...goal, turns: v })} /> turns
                   </span>
                 )}
               </GoalOpt>
               <GoalOpt
                 checked={goal.kind === 'best-by'}
-                onSelect={() => setGoal({ kind: 'best-by', turns: 15 })}
+                onSelect={() => setGoalKind('best-by')}
                 title="Best return by a turn"
                 desc="Most stars on hand by a turn: only builds that pay for themselves before then."
               >
                 {goal.kind === 'best-by' && (
                   <span className="inline">
-                    by turn +<NumberField aria-label="Turns from now" min={0} max={200} value={goal.turns} onChange={(v) => setGoal({ ...goal, turns: v })} />
+                    within <NumberField aria-label="Turns from now" min={0} max={200} value={goal.turns} onChange={(v) => editGoal({ ...goal, turns: v })} /> turns
                   </span>
                 )}
               </GoalOpt>
@@ -447,21 +532,27 @@ export default function App() {
             <fieldset className="toggles">
               <legend>The plan may</legend>
               <Toggle label="buy new techs" checked={s.allowNewTech} onChange={(v) => setSettings({ allowNewTech: v })} />
-              <Toggle label="clear forest" checked={s.allowClear} onChange={(v) => setSettings({ allowClear: v })} disabled={!tribe.canClearForest} />
-              <Toggle label="burn forest" checked={s.allowBurn} onChange={(v) => setSettings({ allowBurn: v })} disabled={!tribe.canBurnForest} />
+              <Toggle label={tribe.canClearForest ? 'clear forest' : `clear forest (not for ${tribe.name})`} checked={s.allowClear} onChange={(v) => setSettings({ allowClear: v })} disabled={!tribe.canClearForest} />
+              <Toggle label={tribe.canBurnForest ? 'burn forest' : `burn forest (not for ${tribe.name})`} checked={s.allowBurn} onChange={(v) => setSettings({ allowBurn: v })} disabled={!tribe.canBurnForest} />
               <Toggle label="grow forest" checked={s.allowGrow} onChange={(v) => setSettings({ allowGrow: v })} />
               <Toggle label="destroy buildings" checked={s.allowDestroy} onChange={(v) => setSettings({ allowDestroy: v })} />
             </fieldset>
-            <button type="button" className="primary" onClick={() => !busy && opt.solve(state, goal, stateKey)} aria-disabled={busy || undefined} disabled={unsupported || state.cities.length === 0}>
+            <button type="button" className="primary" onClick={() => !busy && opt.solve(state, goal, stateKey)} aria-disabled={busy || undefined} disabled={!canSolve}>
               {busy ? 'Working…' : opt.solved ? 'Solve again' : 'Find the best layout'}
             </button>
-            {state.cities.length === 0 && <p className="small muted">Add at least one city to the map first.</p>}
-            {stale && <p className="small warn">You changed the map, settings or goal since the last solve. Solve again to update.</p>}
+            {state.cities.length === 0 ? (
+              <p className="small muted">Add at least one city to the map first: pick the City tool and tap a tile.</p>
+            ) : (
+              mappedTiles === 0 && <p className="small muted">Paint the terrain around your cities first: none of your territory is explored yet.</p>
+            )}
+            <p className="sr-only" role="status" aria-live="polite">
+              {busy ? 'Finding the best layout…' : shown && !stale ? shown.summary : ''}
+            </p>
           </section>
 
           {shown && opt.solved && (
-            <section className="panel open">
-              <h2>Plan</h2>
+            <section className="panel open" aria-busy={opt.busy !== null || undefined}>
+              <h2 title={`Solved in ${opt.solved.ms} ms`}>Plan</h2>
               <ResultsPanel
                 key={opt.solved.runId}
                 state={state}
@@ -471,7 +562,13 @@ export default function App() {
                 selected={selectedIndex}
                 onSelect={(i) => opt.pick(state, i, opt.solved!.frontier.plans[i])}
                 onHoverTile={setStepHover}
-                ms={opt.solved.ms}
+                onShowTile={(t) => {
+                  setPinTile(t);
+                  setHover(null);
+                  const wrap = document.querySelector('.mapwrap');
+                  const r = wrap?.getBoundingClientRect();
+                  if (wrap && r && (r.bottom < 0 || r.top > window.innerHeight)) wrap.scrollIntoView({ block: 'center', behavior: 'smooth' });
+                }}
                 stale={stale}
                 loading={opt.busy !== null}
               />
@@ -501,9 +598,9 @@ function describeTile(state: GameState, i: number) {
   return parts.join(' · ');
 }
 
-function ToolBtn({ active, onClick, children, swatch }: { active: boolean; onClick: () => void; children: React.ReactNode; swatch?: string }) {
+function ToolBtn({ active, onClick, children, swatch, title }: { active: boolean; onClick: () => void; children: React.ReactNode; swatch?: string; title?: string }) {
   return (
-    <button type="button" className={`tool${active ? ' on' : ''}`} aria-pressed={active} onClick={onClick}>
+    <button type="button" className={`tool${active ? ' on' : ''}`} aria-pressed={active} onClick={onClick} title={title}>
       {swatch && <span className={`sw ${swatch}`} />}
       {children}
     </button>
@@ -555,7 +652,7 @@ function NewMap({ onCreate, onExample }: { onCreate: (w: number, h: number) => v
   }, []);
   return (
     <details className="newmap" ref={ref}>
-      <summary className="btn secondary">New map</summary>
+      <summary className="btn">New map</summary>
       <div className="pop">
         <label>
           Size
@@ -569,6 +666,7 @@ function NewMap({ onCreate, onExample }: { onCreate: (w: number, h: number) => v
         </label>
         <button
           type="button"
+          className="accent"
           onClick={() => {
             onCreate(size, size);
             close();
@@ -578,7 +676,7 @@ function NewMap({ onCreate, onExample }: { onCreate: (w: number, h: number) => v
         </button>
         <button
           type="button"
-          className="secondary"
+         
           onClick={() => {
             onExample();
             close();

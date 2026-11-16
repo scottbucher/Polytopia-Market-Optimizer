@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { BUILDING_ABBR, BUILDING_NAMES, type BuildingKind } from '../data/rules';
 import type { GameState } from '../model/types';
 
@@ -46,6 +46,10 @@ interface Props {
   svgRef?: React.Ref<SVGSVGElement>;
   /** A paint tool is active: dragging paints instead of scrolling the map. */
   editing?: boolean;
+  /** Tile painted last, flashed briefly so a tap shows it did something. */
+  flash?: { tile: number; n: number } | null;
+  /** Tool shortcut keys while the map has focus; returns true when the key was used. */
+  onToolKey?: (key: string) => boolean;
 }
 
 /** Grid (x,y) -> rotated grid (u,v). */
@@ -85,6 +89,9 @@ export function mapBounds(view: View, w: number, h: number) {
   return { x: minX - pad, y: minY - pad - 20, w: maxX - minX + pad * 2, h: maxY - minY + pad * 2 + 20 };
 }
 
+/** Touch screens get bigger tiles (the map scrolls instead of shrinking). */
+const isCoarse = () => typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
+
 const CITY_COLORS = ['#e8590c', '#1c7ed6', '#d6336c', '#37b24d', '#ae3ec9', '#f59f00', '#0ca678', '#4263eb', '#c2255c', '#74b816'];
 export const cityColor = (i: number) => CITY_COLORS[i % CITY_COLORS.length];
 
@@ -94,13 +101,40 @@ function diamond(cx: number, cy: number, s = 1) {
   return `${cx},${cy - h} ${cx + w},${cy} ${cx},${cy + h} ${cx - w},${cy}`;
 }
 
-export function MapView({ state, view, overlay, highlight, onPaint, onHover, backdrop, tileOpacity = 1, svgRef, editing = false }: Props) {
+export function MapView({ state, view, overlay, highlight, onPaint, onHover, backdrop, tileOpacity = 1, svgRef, editing = false, flash, onToolKey }: Props) {
   const { width: w, height: h } = state;
   const bounds = useMemo(() => mapBounds(view, w, h), [view, w, h]);
   const painting = useRef(false);
   const [cursor, setCursor] = useState<number | null>(null);
   const cursorRef = useRef<SVGPolygonElement>(null);
   const [focused, setFocused] = useState(false);
+  // Focus that comes from a tap or click shouldn't jump the keyboard cursor to the middle.
+  const pointerFocus = useRef(false);
+  const [coarse] = useState(isCoarse);
+  const ownRef = useRef<SVGSVGElement | null>(null);
+  const setRef = useCallback(
+    (el: SVGSVGElement | null) => {
+      ownRef.current = el;
+      if (typeof svgRef === 'function') svgRef(el);
+      else if (svgRef) (svgRef as React.MutableRefObject<SVGSVGElement | null>).current = el;
+    },
+    [svgRef],
+  );
+  // Open (and re-open after a rotate) with the middle of the map in view, not its left corner.
+  useLayoutEffect(() => {
+    const wrap = ownRef.current?.parentElement;
+    if (!wrap) return;
+    wrap.scrollLeft = (wrap.scrollWidth - wrap.clientWidth) / 2;
+    wrap.scrollTop = (wrap.scrollHeight - wrap.clientHeight) / 2;
+  }, [w, h, view.rot]);
+  // Flash the tile painted last.
+  const [flashing, setFlashing] = useState<number | null>(null);
+  useEffect(() => {
+    if (!flash) return;
+    setFlashing(flash.tile);
+    const t = setTimeout(() => setFlashing(null), 450);
+    return () => clearTimeout(t);
+  }, [flash]);
 
   // Keyboard: arrow keys move a cursor over the tiles (in screen directions), Enter or Space paints.
   const onKeyDown = (e: React.KeyboardEvent) => {
@@ -135,6 +169,8 @@ export function MapView({ state, view, overlay, highlight, onPaint, onHover, bac
     } else if ((e.key === 'Enter' || e.key === ' ') && cursor !== null && onPaint) {
       e.preventDefault();
       onPaint(cursor, true);
+    } else if (!e.ctrlKey && !e.metaKey && !e.altKey && onToolKey?.(e.key)) {
+      e.preventDefault();
     }
   };
 
@@ -185,7 +221,11 @@ export function MapView({ state, view, overlay, highlight, onPaint, onHover, bac
   }, [state.tiles, view, w, h]);
 
   const handleDown = (i: number) => (e: React.PointerEvent) => {
-    if (!onPaint || e.button !== 0) return;
+    if (e.button !== 0) return;
+    // The ring and the footer follow the finger.
+    setCursor(i);
+    onHover?.(i);
+    if (!onPaint) return;
     painting.current = true;
     (e.target as Element).releasePointerCapture?.(e.pointerId);
     onPaint(i, true);
@@ -193,28 +233,33 @@ export function MapView({ state, view, overlay, highlight, onPaint, onHover, bac
 
   return (
     <svg
-      ref={svgRef}
+      ref={setRef}
       className="map"
       viewBox={`${bounds.x} ${bounds.y} ${bounds.w} ${bounds.h}`}
       // Keep tiles big enough to tap on small screens; the map scrolls instead.
-      style={{ minWidth: Math.round(bounds.w * 0.55), touchAction: editing ? 'none' : 'auto' }}
+      style={{ minWidth: Math.round(bounds.w * (coarse ? 0.85 : 0.55)), touchAction: editing ? 'none' : 'auto' }}
+      onPointerDownCapture={() => (pointerFocus.current = true)}
       onPointerUp={() => (painting.current = false)}
-      onPointerLeave={() => {
+      onPointerLeave={(e) => {
         painting.current = false;
-        onHover?.(null);
+        // A finger leaving the screen isn't a mouse moving away: keep showing the tapped tile.
+        if (e.pointerType !== 'touch') onHover?.(null);
       }}
       tabIndex={0}
       onKeyDown={onKeyDown}
       onBlur={() => setFocused(false)}
       onFocus={() => {
+        const byPointer = pointerFocus.current;
+        pointerFocus.current = false;
+        if (byPointer) return;
         setFocused(true);
-        // Show the cursor straight away (where it was last, or the middle of the map).
+        // Show the keyboard cursor straight away (where it was last, or the middle of the map).
         const c = cursor ?? Math.floor(h / 2) * w + Math.floor(w / 2);
         setCursor(c);
         onHover?.(c);
       }}
       role="application"
-      aria-label={`Map, ${w} by ${h} tiles. Arrow keys move the cursor${onPaint ? ', Enter paints with the selected tool' : ''}.`}
+      aria-label={`Map, ${w} by ${h} tiles. Arrow keys move the cursor${onPaint ? ', Enter paints with the selected tool' : ''}. Keys 1 to 6 pick a terrain, M picks Move.`}
     >
       {backdrop && (
         <image
@@ -235,7 +280,7 @@ export function MapView({ state, view, overlay, highlight, onPaint, onHover, bac
           return (
             <g
               key={i}
-              className={`tile t-${t.terrain}${dim ? ' dim' : ''}${highlight === i ? ' hl' : ''}`}
+              className={`tile t-${t.terrain}${dim ? ' dim' : ''}${highlight === i ? ' hl' : ''}${flashing === i ? ' just-painted' : ''}`}
               onPointerDown={handleDown(i)}
               onPointerEnter={(e) => {
                 onHover?.(i);
@@ -293,6 +338,8 @@ export function MapView({ state, view, overlay, highlight, onPaint, onHover, bac
             if (!steps?.length && inc === undefined) return null;
             // The step that finishes the tile (its building), with earlier ones listed in the tooltip.
             const last = steps?.[steps.length - 1];
+            // On a city tile the name sits underneath, so the bubble goes to the left of the badge.
+            const bx = state.tiles[i].improvement === 'city' ? cx - 18 : cx + 18;
             return (
               <g key={i}>
                 {inc !== undefined && (
@@ -303,8 +350,8 @@ export function MapView({ state, view, overlay, highlight, onPaint, onHover, bac
                 {last !== undefined && (
                   <g className="stepnum">
                     <title>{`Step${steps!.length > 1 ? 's' : ''} ${steps!.join(', ')}`}</title>
-                    <circle cx={cx + 17} cy={cy - 11} r={8} />
-                    <text x={cx + 17} y={cy - 7.5}>
+                    <circle cx={bx} cy={cy - 11} r={9} />
+                    <text x={bx} y={cy - 7.5}>
                       {last}
                     </text>
                   </g>
@@ -321,7 +368,7 @@ export function MapView({ state, view, overlay, highlight, onPaint, onHover, bac
           if (i < 0 || i >= state.tiles.length) return null;
           const [cx, cy] = tileCenter(view, w, h, i);
           return (
-            <text key={ci} x={cx} y={cy + 18}>
+            <text key={ci} x={cx} y={cy + 22}>
               {c.name}
             </text>
           );

@@ -26,6 +26,8 @@ export function ScreenshotPanel({ state, view, backdrop, setBackdrop, tileOpacit
     if (!backdrop) setMsg(null);
   }, [backdrop]);
 
+  const bounds = mapBounds(view, state.width, state.height);
+
   const load = (f: File) => {
     if (backdrop) URL.revokeObjectURL(backdrop.href);
     const url = URL.createObjectURL(f);
@@ -120,23 +122,23 @@ export function ScreenshotPanel({ state, view, backdrop, setBackdrop, tileOpacit
           <p className="muted small">
             Best effort: put a screenshot under the map, line up the grid, and the app guesses the terrain of tiles still marked Unexplored from the colours. You still add crops, metal and buildings by hand.
           </p>
-          <button type="button" onClick={() => fileRef.current?.click()}>
+          <button type="button" className="fit" onClick={() => fileRef.current?.click()}>
             Choose screenshot
           </button>
         </>
       ) : (
         <>
-          <Slider label="Left / right" min={-2000} max={2000} value={backdrop.x} onChange={(x) => setBackdrop({ ...backdrop, x })} />
-          <Slider label="Up / down" min={-2000} max={2000} value={backdrop.y} onChange={(y) => setBackdrop({ ...backdrop, y })} />
-          <Slider label="Size" min={0.05} max={4} step={0.01} value={backdrop.scale} onChange={(scale) => setBackdrop({ ...backdrop, scale })} />
-          <Slider label="Map opacity" min={0} max={1} step={0.05} value={tileOpacity} onChange={setTileOpacity} />
+          {msg && <p className="small">{msg}</p>}
+          <Slider label="Left / right" min={Math.round(bounds.x - bounds.w)} max={Math.round(bounds.x + bounds.w)} nudge={2} value={backdrop.x} format={(v) => `${Math.round(v - bounds.x)}`} onChange={(x) => setBackdrop({ ...backdrop, x })} less="Move screenshot left" more="Move screenshot right" />
+          <Slider label="Up / down" min={Math.round(bounds.y - bounds.h)} max={Math.round(bounds.y + bounds.h)} nudge={2} value={backdrop.y} format={(v) => `${Math.round(v - bounds.y)}`} onChange={(y) => setBackdrop({ ...backdrop, y })} less="Move screenshot up" more="Move screenshot down" />
+          <Slider label="Size" min={0.05} max={4} step={0.005} nudge={0.005} value={backdrop.scale} format={(v) => `${Math.round(v * 1000) / 10}%`} onChange={(scale) => setBackdrop({ ...backdrop, scale })} less="Make screenshot smaller" more="Make screenshot bigger" />
+          <Slider label="Map opacity" min={0} max={1} step={0.05} value={tileOpacity} format={(v) => `${Math.round(v * 100)}%`} onChange={setTileOpacity} />
           <div className="row">
-            <button type="button" onClick={guess}>
+            <button type="button" className="accent" onClick={guess}>
               Guess terrain
             </button>
             <button
               type="button"
-              className="secondary"
               onClick={() => {
                 URL.revokeObjectURL(backdrop.href);
                 setBackdrop(null);
@@ -149,16 +151,47 @@ export function ScreenshotPanel({ state, view, backdrop, setBackdrop, tileOpacit
           </div>
         </>
       )}
-      {msg && <p className="small">{msg}</p>}
+      {!backdrop && msg && <p className="small">{msg}</p>}
     </div>
   );
 }
 
-function Slider({ label, min, max, step = 1, value, onChange }: { label: string; min: number; max: number; step?: number; value: number; onChange: (v: number) => void }) {
+interface SliderProps {
+  label: string;
+  min: number;
+  max: number;
+  step?: number;
+  value: number;
+  format: (v: number) => string;
+  onChange: (v: number) => void;
+  /** Fine-step buttons either side of the slider: the step and their labels. */
+  nudge?: number;
+  less?: string;
+  more?: string;
+}
+
+function Slider({ label, min, max, step = 1, value, format, onChange, nudge, less, more }: SliderProps) {
+  const clamp = (v: number) => Math.min(max, Math.max(min, v));
+  const text = format(value);
   return (
-    <label className="slider">
-      <span>{label}</span>
-      <input type="range" min={min} max={max} step={step} value={value} onChange={(e) => onChange(Number(e.target.value))} />
-    </label>
+    <div className="slider">
+      <label>
+        <span>{label}</span>
+        <input type="range" min={min} max={max} step={step} value={clamp(value)} aria-valuetext={text} onChange={(e) => onChange(Number(e.target.value))} />
+      </label>
+      {nudge ? (
+        <span className="nudge">
+          <button type="button" className="icon" aria-label={less} title={less} onClick={() => onChange(clamp(value - nudge))}>
+            −
+          </button>
+          <button type="button" className="icon" aria-label={more} title={more} onClick={() => onChange(clamp(value + nudge))}>
+            +
+          </button>
+        </span>
+      ) : (
+        <span />
+      )}
+      <output aria-hidden="true">{text}</output>
+    </div>
   );
 }

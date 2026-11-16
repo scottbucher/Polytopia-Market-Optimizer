@@ -66,7 +66,9 @@ export function evaluateGoal(state: GameState, frontier: Frontier, goal: Goal): 
     const r = planResult(state, top);
     r.summary =
       top.changes.length === 0
-        ? `Your markets already make the most they can here: ${top.income}★ per turn.`
+        ? top.income === 0
+          ? 'No market can make income here yet. Markets need a sawmill, windmill or forge next to them: check that your cities have explored fields, forest or mountains.'
+          : `Your markets already make the most they can here: ${top.income}★ per turn.`
         : `Maximum market income is ${top.income}★ per turn, for ${top.cost}★ in total.`;
     return r;
   }
