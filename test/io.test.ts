@@ -157,3 +157,12 @@ describe('painting tools: bad input', () => {
     expect(s.tiles[0].city).toBe(0);
   });
 });
+
+describe('painting: city count', () => {
+  it('removing a city keeps a city count you set yourself', () => {
+    const s = makeState('.....\n..C..\n.....\n.....\n..C..', { cityCount: 10 });
+    applyTool(s, { kind: 'city' }, 22);
+    expect(s.cities.length).toBe(1);
+    expect(s.settings.cityCount).toBe(10);
+  });
+});

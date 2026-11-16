@@ -58,3 +58,37 @@ describe('more pinned values', () => {
     expect(decompressState(packed).length).toBe(data.length);
   });
 });
+
+const two = (x: number) => (x < 3 ? 0 : 1);
+describe('build order pins', () => {
+  it('income of markets two tiles away stays current while ordering', () => {
+    const r0 = makeState(map('f.ff.MM/m..~fff/fC..fC~/.,,.,,./mfff,,f'), { owned: ['riding', 'mathematics', 'organization', 'farming', 'mining', 'freespirit'], cityCount: 3, stars: 16, baseIncome: 4, allowDestroy: true, allowGrow: true }, two);
+    expect(runOptimizer(r0, { kind: 'max' }).result!.schedule.starsAtTurn[30]).toBeGreaterThanOrEqual(310);
+    expect(runOptimizer(r0, { kind: 'best-by', turns: 25 }).result!.bankAtDeadline).toBeGreaterThanOrEqual(210);
+    const r2 = makeState(map(',,ffmm./,m,ff.~/,Cm.mCm/f,f~f.f/.f~fffm'), { owned: ['mathematics'], cityCount: 2, stars: 13, baseIncome: 3, allowDestroy: false, allowGrow: true }, two);
+    expect(runOptimizer(r2, { kind: 'income', income: 9, turns: 30 }).result!.reachedTurn).toBeLessThanOrEqual(18);
+  });
+  it('equal-payback bundles go cheapest first', () => {
+    const r9 = makeState(map('~~f~mf,/ff~.f.m/MCff.C./MM~Mfff/fm.fMf.'), { owned: ['riding', 'trade', 'hunting', 'forestry', 'mathematics', 'organization', 'farming', 'freespirit', 'meditation'], cityCount: 2, stars: 19, baseIncome: 5, allowDestroy: false, allowGrow: true }, two);
+    expect(runOptimizer(r9, { kind: 'bank', stars: 60, turns: 15 }).result!.bankAtDeadline).toBeGreaterThanOrEqual(180);
+    expect(runOptimizer(r9, { kind: 'best-by', turns: 8 }).result!.bankAtDeadline).toBeGreaterThanOrEqual(89);
+    const r20 = withBuildings(makeState(map('..~f,~M/,m,fff~/fC,..Cf/.m,fff~/ffmff,,'), { owned: ['roads', 'trade', 'forestry', 'mathematics', 'farming', 'mining', 'chivalry'], cityCount: 5, stars: 11, baseIncome: 6, allowDestroy: true, allowGrow: false }, two), { 14: 'other', 34: 'market' });
+    expect(runOptimizer(r20, { kind: 'best-by', turns: 25 }).result!.bankAtDeadline).toBeGreaterThanOrEqual(385);
+  });
+});
+
+describe('goal summaries', () => {
+  it('"if you build nothing" counts income up to the deadline', () => {
+    const s = makeState('fff\nfCf\nfff', { stars: 5, baseIncome: 5 });
+    const r = runOptimizer(s, { kind: 'best-by', turns: 10 }).result!;
+    expect(r.bankIfNothing).toBe(55);
+    expect(r.summary).toContain('55★');
+  });
+
+  it('an income you already have is met with nothing to build', () => {
+    const s = withBuildings(makeState('f..\nC..', { owned: ['hunting', 'forestry', 'mathematics', 'riding', 'roads', 'trade'] }), { 0: 'lumberhut', 1: 'sawmill', 2: 'market' });
+    const r = runOptimizer(s, { kind: 'income', income: 1, turns: 5 }).result!;
+    expect(r.reachedTurn).toBe(0);
+    expect(r.summary).toMatch(/already make 1★/);
+  });
+});
