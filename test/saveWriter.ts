@@ -11,6 +11,11 @@ export interface FakeTile {
   cityName?: string;
   production?: number;
   seenBy?: number[];
+  /** A unit stands here (optionally carrying a passenger). */
+  unit?: { passenger?: boolean };
+  rewards?: number;
+  rebellion?: number;
+  flooded?: boolean;
 }
 
 export interface FakePlayer {
@@ -21,6 +26,8 @@ export interface FakePlayer {
   techs: number[];
   ai?: boolean;
   cities?: number;
+  /** Task types (1 and 5 carry 6 bytes, 2..8 carry 2). */
+  tasks?: number[];
 }
 
 class W {
@@ -29,7 +36,18 @@ class W {
   u16(v: number) { this.u8(v); this.u8(v >> 8); }
   u32(v: number) { this.u16(v & 0xffff); this.u16((v >>> 16) & 0xffff); }
   i32(v: number) { this.u32(v >>> 0); }
-  str(s: string) { const e = new TextEncoder().encode(s); this.u8(e.length); for (const c of e) this.u8(c); }
+  str(s: string) {
+    const e = new TextEncoder().encode(s);
+    // 7-bit varint length, as .NET writes it.
+    let n = e.length;
+    while (n >= 0x80) {
+      this.u8((n & 0x7f) | 0x80);
+      n >>= 7;
+    }
+    this.u8(n);
+    for (const c of e) this.u8(c);
+  }
+  filler(n: number) { for (let i = 0; i < n; i++) this.u8(0xa5 ^ i); }
   zeros(n: number) { for (let i = 0; i < n; i++) this.u8(0); }
 }
 
@@ -75,10 +93,27 @@ function block(w: W, version: number, turn: number, size: number, tiles: FakeTil
           w.str(t.cityName);
         } else w.u8(0);
         w.u8(0); // founded tribe
-        w.u16(0); // rewards
-        w.u16(0); // rebellion
+        w.u16(t.rewards ?? 0);
+        for (let k = 0; k < (t.rewards ?? 0); k++) w.u16(0x0101 * (k + 1));
+        w.u16(t.rebellion ?? 0);
+        if (t.rebellion) w.u16(0x7777);
       } else w.u8(0);
-      w.u8(0); // no unit
+      if (t.unit) {
+        w.u8(1);
+        w.filler(42); // unit
+        if (t.unit.passenger) {
+          w.u8(1);
+          w.filler(42); // passenger
+          w.u8(0);
+          w.u16(1);
+          w.u16(0x3333); // passenger's history
+          w.filler(5);
+        } else w.u8(0);
+        w.u16(2);
+        w.u16(0x1111);
+        w.u16(0x2222);
+        w.filler(5);
+      } else w.u8(0); // no unit
       const seen = t.seenBy ?? [];
       w.u8(seen.length);
       for (const p of seen) w.u8(p);
@@ -86,7 +121,10 @@ function block(w: W, version: number, turn: number, size: number, tiles: FakeTil
       w.u8(0); // water route
       w.u16(0); // skin
       w.zeros(2);
-      w.u8(0); // flood flag (v >= 105)
+      if (t.flooded) {
+        w.u8(1);
+        w.u32(0xdeadbeef);
+      } else w.u8(0); // flood flag (v >= 105)
     }
   w.u16(players.length);
   for (const p of players) {
@@ -106,7 +144,12 @@ function block(w: W, version: number, turn: number, size: number, tiles: FakeTil
     w.u16(p.techs.length);
     for (const t of p.techs) w.u16(t);
     w.u16(0); // encountered
-    w.u16(0); // tasks (i16)
+    const tasks = p.tasks ?? [];
+    w.u16(tasks.length);
+    for (const t of tasks) {
+      w.u16(t);
+      w.filler(t === 1 || t === 5 ? 6 : 2);
+    }
     w.i32(0);
     w.i32(0);
     w.i32(0);

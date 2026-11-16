@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { runOptimizer } from '../src/solver/index';
+import { objectivesFor, runOptimizer } from '../src/solver/index';
+import { search } from '../src/solver/search';
 import { bigMap } from './perf/bigmap';
 
 // Generous budgets (CI machines are slower); a regression to the old quadratic
@@ -15,4 +16,14 @@ describe('speed on a big map (30×30, 6 cities)', () => {
       expect(performance.now() - t).toBeLessThan(20000);
     }, 60000);
   }
+});
+
+describe('frontier quality on a big map', () => {
+  it('the middle of the frontier stays cheap (peeling works)', () => {
+    const f = search(bigMap(6), { objectives: objectivesFor({ kind: 'max' }) });
+    const at = (inc: number) => f.plans.find((p) => p.income >= inc)!.cost;
+    // Current values; a regression in peel() made these 141★ and 194★.
+    expect(at(12)).toBeLessThanOrEqual(115);
+    expect(at(20)).toBeLessThanOrEqual(180);
+  }, 60000);
 });

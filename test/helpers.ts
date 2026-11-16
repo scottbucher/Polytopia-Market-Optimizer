@@ -5,7 +5,7 @@ import type { GameState, Settings, Tile } from '../src/model/types';
 /**
  * Map legend (one char per tile, rows separated by newlines):
  *  . field   , crop field   f forest   m mountain   M metal mountain   ~ water
- *  C city center   (lowercase letter after '|' row marker not used)
+ *  C city center
  * All tiles are given to city 0 unless `cityOf` says otherwise.
  */
 export function makeState(map: string, settings: Partial<Settings> = {}, cityOf?: (x: number, y: number) => number | null): GameState {
@@ -26,7 +26,6 @@ export function makeState(map: string, settings: Partial<Settings> = {}, cityOf?
       tiles.push(t);
     });
   });
-  const all: TechKey[] = [];
   return {
     width,
     height,
@@ -34,7 +33,7 @@ export function makeState(map: string, settings: Partial<Settings> = {}, cityOf?
     cities,
     settings: {
       tribe: 'generic',
-      owned: all,
+      owned: [] as TechKey[],
       cityCount: Math.max(1, cities.length),
       stars: 0,
       baseIncome: 5,

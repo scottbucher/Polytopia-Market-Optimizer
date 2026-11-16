@@ -77,12 +77,12 @@ describe('build order regressions', () => {
     const flat = orderActions(s, top).bundles.flat();
     const destroy = flat.findIndex((a) => a.kind === 'op' && a.op === 'destroy' && a.tile === 0);
     const newMarket = flat.findIndex((a) => a.kind === 'build' && a.build === 'market' && a.tile !== 0);
-    if (newMarket >= 0) {
-      expect(destroy).toBeGreaterThanOrEqual(0);
-      expect(destroy).toBeLessThan(newMarket);
-      const chivalry = flat.findIndex((a) => a.kind === 'tech' && a.tech === 'chivalry');
-      expect(chivalry).toBeLessThan(destroy);
-    }
+    expect(newMarket).toBeGreaterThanOrEqual(0);
+    expect(destroy).toBeGreaterThanOrEqual(0);
+    expect(destroy).toBeLessThan(newMarket);
+    const chivalry = flat.findIndex((a) => a.kind === 'tech' && a.tech === 'chivalry');
+    expect(chivalry).toBeGreaterThanOrEqual(0);
+    expect(chivalry).toBeLessThan(destroy);
   });
 
   it('income you already have counts from turn 0', () => {

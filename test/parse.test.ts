@@ -218,3 +218,21 @@ describe('id tables', () => {
     expect(toGameState(raw([{}], 4, [], 3), 1).state.settings.cityCount).toBe(3);
   });
 });
+
+describe('variable-length save fields', () => {
+  it('reads units, passengers, city rewards, rebellions, floods, tasks and long names', () => {
+    const plain = world();
+    const busy = world();
+    busy[1][1] = { ...busy[1][1], rewards: 2, rebellion: 1, unit: {} };
+    busy[0][1] = { ...busy[0][1], unit: { passenger: true } };
+    busy[2][1] = { ...busy[2][1], flooded: true };
+    const longName = 'N'.repeat(200);
+    const ps = players([6]);
+    const busyPlayers = [{ ...ps[0], name: longName, tasks: [1, 5, 3] }, ps[1]];
+    const a = parseStateFile(makeSave({ tiles: plain, players: ps }));
+    const b = parseStateFile(makeSave({ tiles: busy, players: busyPlayers }));
+    expect(b.players[0].name).toBe(longName);
+    expect(b.players.map((p) => ({ ...p, name: '' }))).toEqual(a.players.map((p) => ({ ...p, name: '' })));
+    expect(b.tiles).toEqual(a.tiles);
+  });
+});
