@@ -1,5 +1,5 @@
-import { turnNow } from '../model/goalPrefs';
-import type { GameState, Goal } from '../model/types';
+import { turnsFromNow } from '../model/goalPrefs';
+import { type GameState, type Goal, turnNow } from '../model/types';
 import { currentLayout, type Frontier, type Plan } from './exact';
 import { income, neighborTable } from './income';
 import { type Action, orderActions, type Schedule, simulate } from './schedule';
@@ -81,10 +81,10 @@ export function evaluateGoal(state: GameState, frontier: Frontier, goal: Goal): 
 
   if (goal.kind === 'income') {
     const target = goal.income;
-    const now = income(currentLayout(state), state.width, state.height).total;
-    if (now >= target) {
+    const marketNow = income(currentLayout(state), state.width, state.height).total;
+    if (marketNow >= target) {
       const r = planResult(state, plans[0]);
-      return { ...r, bundles: [], schedule: simulate(state, [], goal.turns), met: true, reachedTurn: 0, summary: `Your markets already make ${now}★ per turn, which meets ${target}★. Nothing to build.` };
+      return { ...r, bundles: [], schedule: simulate(state, [], goal.turns), met: true, reachedTurn: 0, summary: `Your markets already make ${marketNow}★ per turn, which meets ${target}★. Nothing to build.` };
     }
     // The cheapest few plans that reach the target (frontier cost rises with income).
     const cands = plans.filter((p) => p.income >= target).slice(0, 16);
@@ -113,7 +113,7 @@ export function evaluateGoal(state: GameState, frontier: Frontier, goal: Goal): 
     }
     const t = best.reachedTurn!;
     best.summary = best.met
-      ? `You can be collecting ${target}★ per turn from markets on turn ${now + t} (${t === 1 ? 'next turn' : `${t} turns from now`}). Markets pay at the start of the turn after they are built.`
+      ? `You can be collecting ${target}★ per turn from markets on turn ${now + t} (${turnsFromNow(now + t, now)}). Markets pay at the start of the turn after they are built.`
       : t === Infinity
         ? `You can't afford to get there with your current income.`
         : `Not possible by turn ${now + goal.turns}. The fastest plan gets there on turn ${now + t}.`;

@@ -4,6 +4,7 @@ import { blankState, exampleState } from './model/defaults';
 import { type GoalKind, type GoalPrefs, loadGoalPrefs, MAX_TURN, resolveGoal, saveGoalPrefs, turnNow, turnsFromNow } from './model/goalPrefs';
 import { download, loadLocal, mapJson, parseJson, saveLocal } from './model/io';
 import { applyTool, type Tool } from './model/paint';
+import { readPref, writePref } from './model/prefs';
 import type { GameState } from './model/types';
 import type { RawSave } from './parse/stateFile';
 import { humanPlayers, toGameState } from './parse/toGameState';
@@ -13,14 +14,15 @@ import { income } from './solver/income';
 import { techPrice } from './solver/options';
 import { layoutAfter } from './solver/schedule';
 import { plural, where } from './ui/describe';
-import { type Backdrop, cityColor, GAME_VIEW, isGameView, loadView, MapView, type Overlay, readPref, saveView, type View, writePref } from './ui/MapView';
+import { type Backdrop, GAME_VIEW, isGameView, loadView, MapView, type Overlay, saveView, type View } from './ui/MapView';
+import { CityRow } from './ui/CityRow';
 import { NumberField } from './ui/NumberField';
 import { ResultsPanel } from './ui/ResultsPanel';
 import { ScreenshotPanel } from './ui/ScreenshotPanel';
 import { TechPicker } from './ui/TechPicker';
 import { useOptimizer } from './ui/useOptimizer';
 import { LoadSave, SyncBar } from './ui/LoadSave';
-import { gameKeyOf, makeLink, mergeRefresh, sameGame } from './ui/saveSync';
+import { loadNotice, makeLink, mergeRefresh, routeSave } from './ui/saveSync';
 import { type SaveRead, type SyncWhy, useSaveSync } from './ui/useSaveSync';
 
 const TERRAINS: [Terrain, string][] = [
@@ -155,22 +157,13 @@ export default function App() {
   // ---------- loading ----------
   /** A save was read: a new load, or a refresh that keeps your settings when it's the same game. */
   const ingestSave = (save: RawSave, read: SaveRead, why: SyncWhy) => {
-    const humans = humanPlayers(save);
-    if (!humans.length) {
-      if (why === 'load') setError('No human player found in this save.');
-      return;
-    }
-    const link = sync.link;
-    if (why !== 'load' && link && sameGame(link, gameKeyOf(save, read.stamp.name)) && humans.some((h) => h.id === link.playerId)) {
-      refreshSave(save, link.playerId, read);
-      return;
-    }
-    // A different game: a new file in the save folder, or another file picked on Refresh.
-    const note = why === 'auto' ? 'Found a new game in the save folder.' : why === 'refresh' ? 'That save is a different game, so it replaced the map.' : undefined;
-    if (humans.length === 1) applySave(save, humans[0].id, read, note);
+    const route = routeSave(sync.link, save, read.stamp.name, why);
+    if (route.kind === 'error') setError(route.message);
+    else if (route.kind === 'refresh') refreshSave(save, route.playerId, read);
+    else if (route.kind === 'replace') applySave(save, route.playerId, read, route.note);
     else {
       setError(null);
-      setPendingSave({ save, name: read.stamp.name, read, note });
+      setPendingSave({ save, name: read.stamp.name, read, note: route.note });
     }
   };
 
@@ -180,6 +173,10 @@ export default function App() {
       const r = toGameState(save, playerId, read.stamp.name);
       refreshState((prev) => mergeRefresh(prev, link.incomeEstimate, r.state), r.state.cities.length);
       sync.linked(makeLink(read.kind, read.stamp, save, playerId, r.incomeEstimate), read);
+      // The banners were about the read before this one.
+      setNotice(null);
+      setUndo(null);
+      setError(null);
     } catch (e) {
       setError(`Couldn't use that save. (Details: ${e instanceof Error ? e.message : String(e)})`);
     }
@@ -189,21 +186,7 @@ export default function App() {
     try {
       const r = toGameState(save, playerId, read.stamp.name);
       const cur = income(currentLayout(r.state), r.state.width, r.state.height).total;
-      replaceState(
-        r.state,
-        [
-          note,
-          `Loaded turn ${save.header.currentTurn}: ${plural(r.state.cities.length, 'city', 'cities')}.`,
-          r.hiddenTiles ? `${plural(r.hiddenTiles, 'tile')} you haven't explored ${r.hiddenTiles === 1 ? 'is' : 'are'} hidden.` : '',
-          `Your markets make ${cur}★ now.`,
-          `"Income per turn" is an estimate: check it against the +★ number in the game.`,
-          ...save.warnings,
-        ]
-          .filter(Boolean)
-          .join(' '),
-        true,
-        true,
-      );
+      replaceState(r.state, loadNotice(save, r, cur, note), true, true);
       sync.linked(makeLink(read.kind, read.stamp, save, playerId, r.incomeEstimate), read);
     } catch (e) {
       setPendingSave(null);
@@ -498,64 +481,17 @@ export default function App() {
               <p className="muted small">Level and population (the filled pips under the city's name) let the plan count the rewards when its buildings level a city up.</p>
               <div className="cities">
                 {state.cities.map((c, i) => (
-                  <div key={i} className="city-row">
-                    <label>
-                      <span className="dot" style={{ background: cityColor(i) }} />
-                      <input
-                        value={c.name}
-                        aria-label={`Name of city ${i + 1}`}
-                        onChange={(e) =>
-                          update((st) => {
-                            st.cities[i].name = e.target.value;
-                            return st;
-                          })
-                        }
-                      />
-                    </label>
-                    <span className="city-growth">
-                      <select
-                        aria-label={`Level of ${c.name || `city ${i + 1}`}`}
-                        value={c.level ?? ''}
-                        onChange={(e) =>
-                          update((st) => {
-                            const city = st.cities[i];
-                            if (e.target.value === '') {
-                              delete city.level;
-                              delete city.population;
-                            } else {
-                              city.level = Number(e.target.value);
-                              city.population = Math.min(city.level, city.population ?? 0);
-                            }
-                            return st;
-                          })
-                        }
-                      >
-                        <option value="">Level ?</option>
-                        {Array.from({ length: Math.max(12, c.level ?? 0) }, (_, k) => k + 1).map((l) => (
-                          <option key={l} value={l}>
-                            Level {l}
-                          </option>
-                        ))}
-                      </select>
-                      {c.level !== undefined && (
-                        <label className="pop">
-                          <NumberField
-                            aria-label={`Population of ${c.name || `city ${i + 1}`}`}
-                            min={0}
-                            max={c.level}
-                            value={c.population ?? 0}
-                            onChange={(v) =>
-                              update((st) => {
-                                st.cities[i].population = v;
-                                return st;
-                              })
-                            }
-                          />
-                          /{c.level + 1}
-                        </label>
-                      )}
-                    </span>
-                  </div>
+                  <CityRow
+                    key={i}
+                    city={c}
+                    index={i}
+                    onChange={(edit) =>
+                      update((st) => {
+                        edit(st.cities[i]);
+                        return st;
+                      })
+                    }
+                  />
                 ))}
               </div>
             </details>
@@ -688,6 +624,7 @@ export default function App() {
                   const r = wrap?.getBoundingClientRect();
                   if (wrap && r && (r.bottom < 0 || r.top > window.innerHeight)) wrap.scrollIntoView({ block: 'center', behavior: 'smooth' });
                 }}
+                turn={opt.solved.turn}
                 stale={stale}
                 loading={opt.busy !== null}
               />

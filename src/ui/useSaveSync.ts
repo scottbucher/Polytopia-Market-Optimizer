@@ -3,19 +3,15 @@
 // or a new one); this hook only reads files and reports them.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { readPref, writePref } from '../model/prefs';
 import { parseStateFile, type RawSave } from '../parse/stateFile';
 import { findCurrent, type Found, fsAccess, loadStored, observe, permission, pickFile, pickFolder, type Source, saveStored, type StoredSource } from './saveSource';
-import { changed, type FileStamp, type LinkedSave, type SourceKind, withRetry } from './saveSync';
+import { changed, type FileStamp, type LinkedSave, type SyncWhy, withRetry } from './saveSync';
 
-/** load: the user picked a file to open. refresh: they asked for a re-read. auto: the file changed. */
-export type SyncWhy = 'load' | 'refresh' | 'auto';
+export type { SyncWhy } from './saveSync';
 
-export interface SaveRead {
-  kind: SourceKind;
-  stamp: FileStamp;
-  /** The handle it came from (not for the plain file input). */
-  source?: Source;
-}
+/** A save that was read, and the handle it came from (none for the plain file input). */
+export type SaveRead = { stamp: FileStamp } & ({ kind: 'input' } | { kind: Source['kind']; source: Source });
 
 export type SyncStatus = { kind: 'idle' } | { kind: 'busy' } | { kind: 'note'; message: string } | { kind: 'problem'; message: string };
 
@@ -33,7 +29,7 @@ const POLL_MS = 2500;
 /** Wait this long after a change before reading, and again between tries. The game writes in place. */
 const SETTLE_MS = 700;
 const RETRY_MS = 1200;
-const WATCH_KEY = 'market-planner/sync-watch';
+const WATCH_KEY = 'market-planner/sync-watch/v1';
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 const parse = async (f: File) => parseStateFile(new Uint8Array(await f.arrayBuffer()));
@@ -49,13 +45,7 @@ export function useSaveSync(opts: Options) {
   const [stored, setStored] = useState<Source | null>(null);
   const [needsPermission, setNeedsPermission] = useState(false);
   const [status, setStatus] = useState<SyncStatus>({ kind: 'idle' });
-  const [watch, setWatchState] = useState(() => {
-    try {
-      return localStorage.getItem(WATCH_KEY) !== 'off';
-    } catch {
-      return true;
-    }
-  });
+  const [watch, setWatchState] = useState(() => readPref<unknown>(WATCH_KEY, true) !== false);
   const linkRef = useRef(link);
   linkRef.current = link;
   const sourceRef = useRef(source);
@@ -64,14 +54,13 @@ export function useSaveSync(opts: Options) {
   const inputWhy = useRef<SyncWhy>('load');
   // The read in progress: auto checks skip while one runs, user actions wait for it.
   const busy = useRef<Promise<void> | null>(null);
+  // Bumped whenever another map or save goes on screen, so a read that started before
+  // (a refresh, or an auto-update still retrying) doesn't bring the old save back.
+  const generation = useRef(0);
 
   const setWatch = (v: boolean) => {
     setWatchState(v);
-    try {
-      localStorage.setItem(WATCH_KEY, v ? 'on' : 'off');
-    } catch {
-      /* storage unavailable */
-    }
+    writePref(WATCH_KEY, v);
   };
 
   const persist = (v: StoredSource) => {
@@ -123,6 +112,9 @@ export function useSaveSync(opts: Options) {
     busy.current = new Promise<void>((r) => (done = r));
     if (why !== 'auto') setStatus({ kind: 'busy' });
     let seen: FileStamp | null = null;
+    const gen = generation.current;
+    // A refresh or auto-update of a save that is no longer on screen.
+    const gone = () => why !== 'load' && (generation.current !== gen || sourceRef.current !== src);
     try {
       const got = await withRetry(
         async () => {
@@ -134,6 +126,7 @@ export function useSaveSync(opts: Options) {
         why === 'load' ? 2 : 3,
         RETRY_MS,
       );
+      if (gone()) return;
       if (!got) {
         lastStamp.current = null;
         if (why === 'load') {
@@ -146,6 +139,7 @@ export function useSaveSync(opts: Options) {
       setStatus({ kind: 'idle' });
       optsRef.current.onSave(got.save, { kind: src.kind, stamp: got.stamp, source: src }, why);
     } catch (e) {
+      if (gone()) return;
       // Don't try a broken file again until it changes.
       if (seen) lastStamp.current = seen;
       if (domName(e) === 'NotAllowedError') setNeedsPermission(true);
@@ -156,6 +150,8 @@ export function useSaveSync(opts: Options) {
         );
       } else setStatus({ kind: 'problem', message: problemFor(e, src) });
     } finally {
+      // A dropped read takes back its "Reading…" and leaves any other status alone.
+      if (gone()) setStatus((st) => (st.kind === 'busy' ? { kind: 'idle' } : st));
       busy.current = null;
       done();
     }
@@ -209,11 +205,17 @@ export function useSaveSync(opts: Options) {
       clearTimeout(debounce);
       debounce = setTimeout(() => !stopped && visible() && check(), 300);
     };
-    void observe(source, kick).then((stop) => {
-      if (stopped) stop?.();
+    // No change events in this browser, or the observer broke: poll while the tab is visible.
+    const poll = () => {
+      if (stopped || timer !== undefined) return;
+      unobserve?.();
+      unobserve = null;
+      timer = setInterval(() => visible() && check(), POLL_MS);
+    };
+    void observe(source, kick, poll).then((stop) => {
+      if (stopped || timer !== undefined) stop?.();
       else if (stop) unobserve = stop;
-      // No change events in this browser: poll while the tab is visible.
-      else timer = setInterval(() => visible() && check(), POLL_MS);
+      else poll();
     });
     const onVisible = () => visible() && check();
     document.addEventListener('visibilitychange', onVisible);
@@ -284,7 +286,8 @@ export function useSaveSync(opts: Options) {
     },
     /** The app put this save on screen. */
     linked: (next: LinkedSave, read: SaveRead) => {
-      const src = read.kind === 'input' ? null : (read.source ?? sourceRef.current);
+      generation.current++;
+      const src = read.kind === 'input' ? null : read.source;
       setLink(next);
       linkRef.current = next;
       sourceRef.current = src;
@@ -296,6 +299,7 @@ export function useSaveSync(opts: Options) {
     },
     /** Another map replaced the save's: stop following it (it can still be opened again). */
     unlink: () => {
+      generation.current++;
       if (!linkRef.current) return;
       setLink(null);
       linkRef.current = null;

@@ -145,11 +145,13 @@ export function LoadSave({ sync }: { sync: SaveSync }) {
 }
 
 /** Why auto-update isn't offered, in one line. */
-function noFollowReason(): string {
-  if (!fsAccess) return 'Auto-update needs Chrome or Edge.';
-  if (OS === 'mac') return "Auto-update can't work on a Mac: browsers don't let pages watch the Library folder.";
-  if (OS === 'linux') return "Auto-update can't work here: browsers don't let pages watch hidden app folders.";
-  return 'Auto-update needs Chrome or Edge on a computer.';
+export function noFollowReason(os: Os, canPick: boolean): string {
+  if (isMobile(os) || os === 'chromeos') return "Auto-update can't work here: the game keeps its saves where browsers can't reach.";
+  if (os === 'mac') return "Auto-update can't work on a Mac: browsers don't let pages watch the Library folder.";
+  if (os === 'linux') return "Auto-update can't work here: browsers don't let pages watch hidden app folders.";
+  if (!canPick) return 'Auto-update needs Chrome or Edge.';
+  if (os === 'windows') return 'For auto-update, load the save folder with Load game save.';
+  return 'Auto-update needs Chrome or Edge on Windows.';
 }
 
 export function SyncBar({ sync, planStale, onSolve }: { sync: SaveSync; planStale: boolean; onSolve: (() => void) | null }) {
@@ -180,7 +182,7 @@ export function SyncBar({ sync, planStale, onSolve }: { sync: SaveSync; planStal
             Reconnect
           </button>
         ) : (
-          <button type="button" onClick={sync.refresh} disabled={st.kind === 'busy'} title={sync.live ? 'Read the save file again' : 'Choose the save file again to read it'}>
+          <button type="button" onClick={sync.refresh} disabled={st.kind === 'busy'} title={`${sync.live ? 'Read the save file again' : 'Choose the save file again to read it'}. Changes you made to the map are replaced.`}>
             Refresh
           </button>
         )}
@@ -189,7 +191,7 @@ export function SyncBar({ sync, planStale, onSolve }: { sync: SaveSync; planStal
             <input type="checkbox" checked={sync.watch} onChange={(e) => sync.setWatch(e.target.checked)} /> Keep up to date
           </label>
         ) : (
-          <span className="small muted">{noFollowReason()}</span>
+          <span className="small muted">{noFollowReason(OS, fsAccess)}</span>
         )}
         {planStale && onSolve && (
           <span className="small">

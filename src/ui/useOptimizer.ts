@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { GameState, Goal } from '../model/types';
+import { type GameState, type Goal, turnNow } from '../model/types';
 import type { Plan } from '../solver/exact';
 import type { GoalResult } from '../solver/goals';
 import type { OptimizeResult } from '../solver/index';
@@ -10,6 +10,8 @@ export interface Solved extends OptimizeResult {
   stateKey: string;
   /** Changes on every solve. */
   runId: number;
+  /** The game turn it was solved on: a refresh can move the game on before you solve again. */
+  turn: number;
 }
 
 /** Runs the optimizer in a worker. One job at a time: a new one cancels the last. */
@@ -51,8 +53,9 @@ export function useOptimizer(onError: (msg: string) => void) {
 
   const solve = (state: GameState, goal: Goal, stateKey: string) => {
     setPicked(null);
+    const turn = turnNow(state);
     run({ type: 'solve', id: ++reqId.current, state, goal }, (r) => {
-      if (r.type === 'solve') setSolved({ ...r.result, stateKey, runId: r.id });
+      if (r.type === 'solve') setSolved({ ...r.result, stateKey, runId: r.id, turn });
     });
   };
 

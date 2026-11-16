@@ -13,7 +13,7 @@
 
 import { BUILD_TECH, type BuildingKind, isProducer, LIMITED, LITERACY_TECH, OP_TECH, opCost, PRODUCER_SUPPORT, PRODUCERS, TECH_BY_KEY, type TechKey } from '../data/rules';
 import type { GameState } from '../model/types';
-import { growAll, growthStart, growthValue, type LevelUp, popGain } from './cities';
+import { growAll, growthStart, growthValue, type LevelUp, penaltyOf, popAt, popGain } from './cities';
 import { currentLayout, type Plan } from './exact';
 import { income, type Layout, type LayoutGet, marketIncomeAt, neighborTable, radius2Table } from './income';
 import { missingChain, type Op, techPrice } from './options';
@@ -51,6 +51,11 @@ export interface Schedule {
   upgradeStars: number;
   /** Stars per turn city level-ups add by the end (levels, Workshops, Parks). */
   upgradeIncome: number;
+  /**
+   * Stars per turn cities lose by the end to population below zero (destroyed farms,
+   * huts and mines take theirs away), compared with now.
+   */
+  popPenalty: number;
 }
 
 export interface Order {
@@ -208,8 +213,17 @@ export function orderActions(state: GameState, plan: Plan): Order {
   const growth = growthStart(state);
   const gains = new Map<number, number>();
   const grownCities = new Set<number>();
+  // Population each tile's building gives now, updated on every commit.
+  const popNow = growth ? layout.map((_, i) => popAt(getNow, nb, i)) : [];
 
-  const evaluate = (d: Draft) => {
+  /** Population each city gains from a draft, as things stand. */
+  const draftGains = (d: Draft) => popGain(state, nb, getNow, getter(d), d.over.keys(), new Map(), popNow);
+
+  /**
+   * Income gained per star spent. `base` is a draft this one grew from, with its
+   * population gains: then only what changed since it is looked at again.
+   */
+  const evaluate = (d: Draft, base?: { d: Draft; gains: Map<number, number> }) => {
     // Only markets within 2 tiles of a changed tile can change.
     gen++;
     const get = getter(d);
@@ -225,9 +239,15 @@ export function orderActions(state: GameState, plan: Plan): Order {
     if (growth) {
       // A level-up's stars make the bundle cheaper; its stars per turn count as income.
       gains.clear();
-      const v = growthValue(growth, popGain(state, nb, getNow, get, tilesOf(d.list), gains));
-      gain += v.income;
-      cost -= v.stars;
+      if (base) {
+        for (const [c, n] of base.gains) gains.set(c, n);
+        popGain(state, nb, getter(base.d), get, d.over.keys(), gains);
+      } else popGain(state, nb, getNow, get, d.over.keys(), gains, popNow);
+      if (gains.size) {
+        const v = growthValue(growth, gains);
+        gain += v.income;
+        cost -= v.stars;
+      }
     }
     // Free (or refunding) steps that don't lose income go first.
     const score = cost <= 0 ? (gain >= 0 ? 1e9 + gain - cost : -1) : gain / cost;
@@ -252,6 +272,8 @@ export function orderActions(state: GameState, plan: Plan): Order {
     cost: number;
     score: number;
     tiles: number[];
+    /** Cities whose population the bundle can change (a producer's city can differ from its huts'). */
+    cities: Set<number | null>;
   }
 
   const bundleFor = (a: Action): Cand | null => {
@@ -282,18 +304,26 @@ export function orderActions(state: GameState, plan: Plan): Order {
         for (const y of near) pool.add(y);
       }
       let improved: { d: Draft; e: ReturnType<typeof evaluate> } | null = null;
+      // Each trial adds a little to `d`: count the population from what it adds.
+      const base = growth ? { d, gains: draftGains(d) } : undefined;
       for (const c of pool) {
         if (done.has(c.id) || d.ids.has(c.id)) continue;
         const trial = copy(d);
         if (!need(trial, c)) continue;
-        const te = evaluate(trial);
+        const te = evaluate(trial, base);
         if (te.score > (improved?.e.score ?? e.score) + 1e-9) improved = { d: trial, e: te };
       }
       if (!improved) break;
       d = improved.d;
       e = improved.e;
     }
-    return { d, ...e, tiles: tilesOf(d.list) };
+    const tiles = tilesOf(d.list);
+    const cities = new Set<number | null>();
+    for (const t of tiles) {
+      cities.add(cityOf(t));
+      for (const n of nb[t]) cities.add(cityOf(n));
+    }
+    return { d, ...e, tiles, cities };
   };
 
   const commit = (a: Action) => {
@@ -311,6 +341,8 @@ export function orderActions(state: GameState, plan: Plan): Order {
       popGain(state, nb, (i) => (i === a.tile ? was : layout[i]), getNow, [a.tile], gains);
       for (const c of gains.keys()) grownCities.add(c);
       growAll(growth, gains);
+      popNow[a.tile] = popAt(getNow, nb, a.tile);
+      for (const n of nb[a.tile]) popNow[n] = popAt(getNow, nb, n);
     }
   };
 
@@ -362,10 +394,11 @@ export function orderActions(state: GameState, plan: Plan): Order {
     // Re-evaluate bundles that share an action with this one or sit near it.
     const ids = best.d.ids;
     const tiles = best.tiles;
-    // A city that grew changes what level-ups its other bundles can trigger.
-    const grewIn = (c: Cand) => grownCities.size > 0 && c.tiles.some((t) => grownCities.has(state.tiles[t].city!));
     for (const [k, c] of cache) {
-      if (!c || [...c.d.ids].some((x) => ids.has(x)) || near4(c.tiles, tiles) || grewIn(c)) cache.delete(k);
+      if (!c || [...c.d.ids].some((x) => ids.has(x)) || near4(c.tiles, tiles)) cache.delete(k);
+      // A city that grew changes what level-ups its other bundles can trigger. The bundle
+      // itself still stands (nothing near it changed), so only its score is redone.
+      else if (grownCities.size && [...grownCities].some((g) => c.cities.has(g))) cache.set(k, { ...c, ...evaluate(c.d) });
     }
     grownCities.clear();
   }
@@ -389,8 +422,9 @@ export function orderActions(state: GameState, plan: Plan): Order {
  * Turn 0 is the current turn (you have `stars` now: the game pays income at the start
  * of your turn, so a save made mid-turn already includes this turn's). Income arrives
  * at the start of each following turn: base income, markets built by the end of the
- * previous turn, and what city level-ups added. So starsAtTurn[t] is what you have on
- * game turn (now + t), after that turn's income and before you spend anything.
+ * previous turn, and what city level-ups added (less what population below zero costs).
+ * So starsAtTurn[t] is what you have on game turn (now + t), after that turn's income
+ * and before you spend anything.
  * A step that levels a city up takes the economic reward at once (Resources' stars
  * can pay for the next step the same turn).
  * Runs at least `horizon` turns, and one turn past the last step so its income shows.
@@ -404,8 +438,11 @@ export function simulate(state: GameState, bundles: Action[][], horizon = 60): S
   const flat = bundles.flatMap((b, g) => b.map((a) => ({ a, g })));
   const growth = growthStart(state);
   const gains = new Map<number, number>();
+  const penaltyStart = growth ? penaltyOf(growth) : 0;
   /** Stars per turn from level-ups so far. */
-  let bonus = 0;
+  let upgradeIncome = 0;
+  /** Stars per turn lost to negative population, compared with the start. */
+  let popPenalty = 0;
   let upgradeStars = 0;
   let stars = s.stars;
   let k = 0;
@@ -431,9 +468,10 @@ export function simulate(state: GameState, bundles: Action[][], horizon = 60): S
           for (const u of ups) {
             stars += u.stars;
             upgradeStars += u.stars;
-            bonus += u.income;
+            upgradeIncome += u.income;
           }
         }
+        if (gains.size) popPenalty = penaltyOf(growth) - penaltyStart;
       }
       steps.push({ action: a, turn, starsBefore: before, starsAfter: stars, incomeAfter: inc(), group: g, ...(levelUps && { levelUps }) });
       doneTurn = turn;
@@ -442,13 +480,14 @@ export function simulate(state: GameState, bundles: Action[][], horizon = 60): S
     if (allDone && turn >= horizon && (flat.length === 0 || turn > doneTurn)) break;
     if (turn >= maxTurns) break;
     const mi = inc();
+    const bonus = upgradeIncome - popPenalty;
     if (!allDone && s.baseIncome + mi + bonus <= 0 && stars < flat[k].a.cost && turn >= horizon) break; // can never afford
     turn++;
     stars += s.baseIncome + mi + bonus;
     starsAtTurn.push(stars);
     incomeAtTurn.push(mi);
   }
-  return { steps, starsAtTurn, incomeAtTurn, doneTurn, finalIncome: inc(), unaffordable: flat.length - k, upgradeStars, upgradeIncome: bonus };
+  return { steps, starsAtTurn, incomeAtTurn, doneTurn, finalIncome: inc(), unaffordable: flat.length - k, upgradeStars, upgradeIncome, popPenalty };
 }
 
 /** The layout once `actions` are done, and which tiles lose their building. */

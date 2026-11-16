@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { BUILDING_ABBR, BUILDING_NAMES, type BuildingKind } from '../data/rules';
+import { readPref, writePref } from '../model/prefs';
 import type { GameState } from '../model/types';
 
 export const TW = 64;
@@ -28,23 +29,6 @@ export function loadView(): View {
   return { ...GAME_VIEW };
 }
 export const saveView = (v: View) => writePref(VIEW_KEY, v);
-
-/** Small per-browser preferences. Storage can be missing or blocked, so failures are ignored. */
-export function readPref<T>(key: string, fallback: T): T {
-  try {
-    const raw = localStorage.getItem(key);
-    return raw === null ? fallback : (JSON.parse(raw) as T);
-  } catch {
-    return fallback;
-  }
-}
-export function writePref(key: string, value: unknown) {
-  try {
-    localStorage.setItem(key, JSON.stringify(value));
-  } catch {
-    // ignore
-  }
-}
 
 export interface Overlay {
   /** Final building per tile for the shown plan. */

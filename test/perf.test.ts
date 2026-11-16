@@ -19,6 +19,22 @@ describe('speed on a big map (30×30, 6 cities)', () => {
 });
 
 describe('speed with city levels known (level-ups modelled)', () => {
+  // 10 touching cities on 30×30: about 1.5× the time without levels (13 s here; it was
+  // 16 s before the build order scored population incrementally).
+  it('best-by, 10 cities', () => {
+    const s = bigMap(10);
+    s.cities.forEach((c, i) => {
+      c.level = 1 + (i % 4);
+      c.population = i % 2;
+    });
+    const t = performance.now();
+    const r = runOptimizer(s, { kind: 'best-by', turns: 25 });
+    expect(r.result!.skipped).toEqual([]);
+    expect(r.result!.schedule.steps.filter((x) => x.levelUps).length).toBeGreaterThanOrEqual(10);
+    expect(r.result!.schedule.upgradeIncome).toBeGreaterThan(0);
+    expect(performance.now() - t).toBeLessThan(45000);
+  }, 90000);
+
   it('best-by', () => {
     const s = bigMap(6);
     s.cities.forEach((c, i) => {

@@ -3,7 +3,7 @@ import { defaultGoalPrefs, type GoalPrefs, goalPrefsJson, parseGoalPrefs, resolv
 import { mapJson, parseJson } from '../src/model/io';
 import { evaluateGoal } from '../src/solver/goals';
 import { search } from '../src/solver/search';
-import { makeState } from './helpers';
+import { makeState, withBuildings } from './helpers';
 
 describe('goal settings', () => {
   it('round-trip, one set of numbers per goal kind', () => {
@@ -65,6 +65,19 @@ describe('deadlines are game turns', () => {
     expect(by30.bankAtDeadline).toBe(61 + 12 * 57);
     expect(by30.summary).toMatch(/turn 30/);
   });
+
+  it('income goals name the game turn, with markets already earning', () => {
+    // A hut next to the sawmill already: the market makes 1★ now.
+    const s = withBuildings(makeState('fff\nf.f\nfC.\n...', { owned: ['hunting', 'forestry'], stars: 3, baseIncome: 3, allowClear: false, allowNewTech: false }), { 0: 'lumberhut', 4: 'sawmill', 8: 'market' });
+    s.turn = 18;
+    const f = search(s, { objectives: [{ kind: 'atleast', income: 3 }, { kind: 'weighted', w: 1000 }] });
+    const r = evaluateGoal(s, f, { kind: 'income', income: 3, turns: 10 })!;
+    expect(r.met).toBe(true);
+    const t = r.reachedTurn!;
+    expect(t).toBeGreaterThan(0);
+    expect(r.summary).toBe(`You can be collecting 3★ per turn from markets on turn ${18 + t} (${turnsFromNow(18 + t, 18)}). Markets pay at the start of the turn after they are built.`);
+    expect(evaluateGoal(s, f, { kind: 'income', income: 1, turns: 10 })!.summary).toBe('Your markets already make 1★ per turn, which meets 1★. Nothing to build.');
+  });
 });
 
 describe('saved maps keep the turn and city levels', () => {
@@ -88,6 +101,10 @@ describe('saved maps keep the turn and city levels', () => {
     const p = parseJson(JSON.stringify(s));
     expect(p.turn).toBeUndefined();
     expect(p.cities[0]).toMatchObject({ level: 3, population: 3 });
+    s.cities[0].population = -3; // below zero after destroying buildings
+    expect(parseJson(JSON.stringify(s)).cities[0]).toMatchObject({ level: 3, population: -3 });
+    s.cities[0].population = -500;
+    expect(parseJson(JSON.stringify(s)).cities[0]).toMatchObject({ level: 3, population: -99 });
     s.cities[0].level = 'big';
     expect(parseJson(JSON.stringify(s)).cities[0]).toEqual({ name: 'City 1', x: 1, y: 1 });
   });

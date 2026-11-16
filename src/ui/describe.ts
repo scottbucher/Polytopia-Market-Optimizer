@@ -1,7 +1,7 @@
-import { BUILDING_NAMES, cityReward, isBuildingKind, OP_NAMES, techName } from '../data/rules';
+import { BUILDING_NAMES, cityReward, isBuildingKind, LEVEL_INCOME, OP_NAMES, techName } from '../data/rules';
 import type { GameState } from '../model/types';
 import type { LevelUp } from '../solver/cities';
-import type { Action } from '../solver/schedule';
+import type { Action, Schedule } from '../solver/schedule';
 
 export function where(state: GameState, tile: number) {
   const x = tile % state.width;
@@ -33,13 +33,43 @@ export const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n ==
 export function enemyNote(n: number) {
   if (n <= 0) return '';
   const tiles = n === 1 ? '1 of your tiles has an enemy unit on it, so the plan leaves it alone.' : `${n} of your tiles have enemy units on them, so the plan leaves them alone.`;
-  return `${tiles} Refresh your save once they move.`;
+  return `${tiles} Refresh your save once ${n === 1 ? 'it moves' : 'they move'}.`;
 }
+
+const cityName = (state: GameState, c: number) => state.cities[c]?.name.trim() || `City ${c + 1}`;
 
 /** "Guarklak reaches level 3: take Resources, +5★ now and +1★ per turn". */
 export function describeLevelUp(state: GameState, u: LevelUp): string {
-  const name = state.cities[u.city]?.name.trim() || `City ${u.city + 1}`;
+  const name = cityName(state, u.city);
   const r = cityReward(u.level)!;
   const gains = [u.stars ? `+${u.stars}★ now` : '', r.population ? `+${r.population} population` : '', u.income ? `+${u.income}★ per turn` : ''].filter(Boolean);
   return `${name} reaches level ${u.level}: take ${r.name}, ${gains.join(' and ')}`;
+}
+
+/**
+ * What the plan's city level-ups add, for the line above the build order:
+ * "Wopix levels up on the way: +2★ per turn (Park +1, level +1)." for one.
+ */
+export function describeUpgrades(state: GameState, ups: LevelUp[]): string {
+  if (ups.length === 1) {
+    const [u] = ups;
+    const r = cityReward(u.level)!;
+    const income = u.income ? `+${u.income}★ per turn (${r.income ? `${r.name} +${r.income}, ` : ''}level +${LEVEL_INCOME})` : '';
+    const gains = [u.stars ? `+${u.stars}★ now` : '', r.population ? `+${r.population} population` : '', income].filter(Boolean);
+    return `${cityName(state, u.city)} levels up on the way: ${gains.join(' and ')}.`;
+  }
+  const stars = ups.reduce((n, u) => n + u.stars, 0);
+  const income = ups.reduce((n, u) => n + u.income, 0);
+  const gains = [stars ? `${stars}★` : '', income ? `+${income}★ per turn (each level adds ${LEVEL_INCOME}★ itself)` : ''].filter(Boolean);
+  return `${ups.length} city upgrades on the way add ${gains.join(' and ')}: take the economic reward each time.`;
+}
+
+/**
+ * Turns until the plan has paid for itself (0 = right away), or null when it never does.
+ * City level-ups count: their stars come off the cost, their stars per turn add to the
+ * market income gained (`marketGain`), less what negative population costs.
+ */
+export function paybackTurns(sch: Pick<Schedule, 'upgradeStars' | 'upgradeIncome' | 'popPenalty'>, spend: number, marketGain: number): number | null {
+  const perTurn = marketGain + sch.upgradeIncome - sch.popPenalty;
+  return perTurn > 0 ? Math.max(0, Math.ceil((spend - sch.upgradeStars) / perTurn)) : null;
 }

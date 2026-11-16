@@ -4,9 +4,14 @@
 
 import type { GameState } from '../model/types';
 import type { RawSave } from '../parse/stateFile';
+import { humanPlayers, type LoadReport } from '../parse/toGameState';
+import { plural } from './describe';
 
 /** How a save was opened: a plain file input (can't be re-read), a file handle, or a folder handle. */
 export type SourceKind = 'input' | 'file' | 'folder';
+
+/** load: the user picked a file to open. refresh: they asked for a re-read. auto: the file changed. */
+export type SyncWhy = 'load' | 'refresh' | 'auto';
 
 /** What tells two reads apart without parsing them. */
 export interface FileStamp {
@@ -40,6 +45,9 @@ export interface LinkedSave extends GameKey {
 export function isStateFile(name: string) {
   return /\.state$/i.test(name) && !name.startsWith('.');
 }
+
+/** The game's folder for multiplayer saves, which a followed folder never reads. */
+export const isMultiplayerFolder = (name: string) => name.toLowerCase() === 'multiplayer';
 
 /**
  * The file of the game being played: the most recently changed .state file.
@@ -85,17 +93,55 @@ export function makeLink(kind: SourceKind, stamp: FileStamp, save: RawSave, play
   };
 }
 
+/** What to do with a save that was read. */
+export type SaveRoute =
+  /** The game on screen: take the new read but keep your settings. */
+  | { kind: 'refresh'; playerId: number }
+  /** Put it on screen in place of the map (`note` says why, when it wasn't asked for). */
+  | { kind: 'replace'; playerId: number; note?: string }
+  /** The same, once you say which of its human players you are. */
+  | { kind: 'ask'; note?: string }
+  | { kind: 'error'; message: string };
+
+/** Decides what a read means, given the save the map on screen came from (`link`). */
+export function routeSave(link: LinkedSave | null, save: RawSave, fileName: string, why: SyncWhy): SaveRoute {
+  const humans = humanPlayers(save);
+  if (!humans.length) return { kind: 'error', message: why === 'load' ? 'No human player found in this save.' : 'No human player found in the save any more, so the map was left as it is.' };
+  if (why !== 'load' && link && sameGame(link, gameKeyOf(save, fileName)) && humans.some((h) => h.id === link.playerId)) return { kind: 'refresh', playerId: link.playerId };
+  // A different game: a new file in the save folder, or another file picked on Refresh.
+  const note = why === 'auto' ? 'Found a new game in the save folder.' : why === 'refresh' ? 'That save is a different game, so it replaced the map.' : undefined;
+  return humans.length === 1 ? { kind: 'replace', playerId: humans[0].id, note } : { kind: 'ask', note };
+}
+
+/** The banner after a save replaced the map. */
+export function loadNotice(save: RawSave, r: LoadReport, marketIncome: number, note?: string): string {
+  return [
+    note,
+    `Loaded turn ${save.header.currentTurn}: ${plural(r.state.cities.length, 'city', 'cities')}.`,
+    r.hiddenTiles ? `${plural(r.hiddenTiles, 'tile')} you haven't explored ${r.hiddenTiles === 1 ? 'is' : 'are'} hidden.` : '',
+    `Your markets make ${marketIncome}★ now.`,
+    `"Income per turn" is an estimate: check it against the +★ number in the game.`,
+    ...save.warnings,
+  ]
+    .filter(Boolean)
+    .join(' ');
+}
+
 /**
  * A refreshed read of the same game. Everything the save knows (stars, techs, map,
- * cities, turn, tribe) comes from `fresh`; what the save doesn't know stays as the user set it:
- * what the plan may do, the rules and costs, and any correction to "Income per turn"
- * (kept as the same offset from the save's estimate, since the estimate moves with the game).
+ * cities, turn, tribe) comes from `fresh`, so map edits are replaced; what the save
+ * doesn't know stays as the user set it: city names you typed (matched by where the
+ * city is), what the plan may do, the rules and costs, and any correction to "Income
+ * per turn" (kept as the same offset from the save's estimate, since the estimate
+ * moves with the game).
  */
 export function mergeRefresh(prev: GameState, prevEstimate: number, fresh: GameState): GameState {
   const p = prev.settings;
   const offset = p.baseIncome - prevEstimate;
+  const names = new Map(prev.cities.map((c) => [`${c.x},${c.y}`, c.name]));
   return {
     ...fresh,
+    cities: fresh.cities.map((c) => ({ ...c, name: names.get(`${c.x},${c.y}`) ?? c.name })),
     settings: {
       ...fresh.settings,
       baseIncome: Math.min(9999, Math.max(0, fresh.settings.baseIncome + offset)),

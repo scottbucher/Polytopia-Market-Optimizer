@@ -1,12 +1,11 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { techName } from '../data/rules';
-import { turnNow } from '../model/goalPrefs';
-import type { GameState } from '../model/types';
+import { type GameState, turnNow } from '../model/types';
 import type { Plan } from '../solver/exact';
 import type { GoalResult } from '../solver/goals';
 import { enemyBlocked } from '../solver/options';
 import type { Step } from '../solver/schedule';
-import { describeAction, describeLevelUp, enemyNote, plural, starText } from './describe';
+import { describeAction, describeLevelUp, describeUpgrades, enemyNote, paybackTurns, starText } from './describe';
 
 interface Props {
   state: GameState;
@@ -18,13 +17,15 @@ interface Props {
   onHoverTile: (t: number | null) => void;
   /** A step was tapped or clicked: show its tile on the map. */
   onShowTile: (t: number) => void;
+  /** The game turn the plan was solved on (its build order counts from it). */
+  turn: number;
   /** The map changed since this was solved: other plans can't be picked. */
   stale: boolean;
   /** A plan's build order is being worked out. */
   loading: boolean;
 }
 
-export function ResultsPanel({ state, result, frontier, currentIncome, selected, onSelect, onHoverTile, onShowTile, stale, loading }: Props) {
+export function ResultsPanel({ state, result, frontier, currentIncome, selected, onSelect, onHoverTile, onShowTile, turn: now, stale, loading }: Props) {
   const [done, setDone] = useState<Set<number>>(new Set());
   // A different plan or result starts with nothing ticked.
   useEffect(() => setDone(new Set()), [result]);
@@ -35,11 +36,12 @@ export function ResultsPanel({ state, result, frontier, currentIncome, selected,
   const techCost = techSteps.reduce((s, x) => s + x.action.cost, 0);
   const finalIncome = result.schedule.finalIncome;
   const gain = finalIncome - currentIncome;
-  const payback = gain > 0 ? Math.ceil(spend / gain) : null;
+  const { popPenalty } = result.schedule;
+  const payback = paybackTurns(result.schedule, spend, gain);
   const blockedNote = useMemo(() => enemyNote(enemyBlocked(state).length), [state]);
-  const now = turnNow(state);
   const levelUps = steps.flatMap((x) => x.levelUps ?? []);
-  const { upgradeStars, upgradeIncome } = result.schedule;
+  // A refresh moved the game on: the plan's turn numbers are from when it was solved.
+  const movedOn = stale && turnNow(state) !== now;
 
   const byTurn = useMemo(() => {
     const m = new Map<number, { step: Step; n: number }[]>();
@@ -52,7 +54,11 @@ export function ResultsPanel({ state, result, frontier, currentIncome, selected,
 
   return (
     <section className={`results${stale ? ' stale' : ''}`}>
-      {stale && <p className="small note warn stale-note">Out of date: you changed the map, settings or goal. Press Solve again to update the plan.</p>}
+      {stale && (
+        <p className="small note warn stale-note">
+          {movedOn ? `Out of date: the game moved on to turn ${turnNow(state)}. Press Solve again to update the plan.` : 'Out of date: you changed the map, settings or goal. Press Solve again to update the plan.'}
+        </p>
+      )}
       <p className={`summary${result.met ? '' : ' warn'}`} aria-live="polite">
         {result.summary}
       </p>
@@ -64,19 +70,15 @@ export function ResultsPanel({ state, result, frontier, currentIncome, selected,
           value={spend < 0 ? `+${-spend}★` : `${spend}★`}
           sub={techSteps.length ? `${techCost}★ of it on techs` : 'no new techs'}
         />
-        <Stat label="Pays for itself" value={payback === null ? '—' : `${payback} turns`} sub={steps.length ? (result.schedule.doneTurn === 0 ? 'all built this turn' : `last step on turn ${now + result.schedule.doneTurn}`) : ''} />
+        <Stat label="Pays for itself" value={payback === null ? '—' : payback === 0 ? 'right away' : `${payback} turn${payback === 1 ? '' : 's'}`} sub={steps.length ? (result.schedule.doneTurn === 0 ? 'all built this turn' : `last step on turn ${now + result.schedule.doneTurn}`) : ''} />
       </div>
       {techSteps.length > 0 && (
         <p className="techs-line">
           Techs to research: {techSteps.map((x) => (x.action.kind === 'tech' ? techName(x.action.tech, state.settings.tribe) : '')).join(', ')}
         </p>
       )}
-      {levelUps.length > 0 && (
-        <p className="upgrades">
-          {levelUps.length === 1 ? 'A city upgrade' : `${levelUps.length} city upgrades`} on the way add{levelUps.length === 1 ? 's' : ''}{' '}
-          {[upgradeStars ? `${upgradeStars}★` : '', upgradeIncome ? `+${upgradeIncome}★ per turn (each level adds 1★ itself)` : ''].filter(Boolean).join(' and ')}: take the economic reward each time.
-        </p>
-      )}
+      {levelUps.length > 0 && <p className="upgrades">{describeUpgrades(state, levelUps)}</p>}
+      {popPenalty > 0 && <p className="small warn">Destroying buildings takes population away: your cities make {popPenalty}★ less per turn until they grow back.</p>}
       {result.skipped.length > 0 && (
         <p className="small warn">
           {result.skipped.length} step{result.skipped.length === 1 ? '' : 's'} of this plan could not be put in a valid order and {result.skipped.length === 1 ? 'is' : 'are'} left out.

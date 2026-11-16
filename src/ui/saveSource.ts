@@ -2,7 +2,7 @@
 // page keep a handle to a file or folder and read it again, plus a small IndexedDB store
 // so the handle survives a reload. Kept thin; the decisions live in saveSync.ts.
 
-import { type FileStamp, isStateFile, type LinkedSave, newestStateFile } from './saveSync';
+import { type FileStamp, isMultiplayerFolder, isStateFile, type LinkedSave, newestStateFile } from './saveSync';
 
 // The API isn't in TypeScript's DOM types yet (or only partly), so describe what we use.
 type PermissionMode = { mode: 'read' };
@@ -24,10 +24,14 @@ type AnyHandle = FileHandle | DirHandle;
 
 export type Source = { kind: 'file'; handle: FileHandle } | { kind: 'folder'; handle: DirHandle };
 
+/** What FileSystemObserver reports; "errored" means it stopped watching. */
+interface ChangeRecord {
+  type: string;
+}
 interface PickerWindow {
   showOpenFilePicker?: (o: object) => Promise<FileHandle[]>;
   showDirectoryPicker?: (o: object) => Promise<DirHandle>;
-  FileSystemObserver?: new (cb: () => void) => { observe(h: AnyHandle, o?: object): Promise<void>; disconnect(): void };
+  FileSystemObserver?: new (cb: (records: ChangeRecord[]) => void) => { observe(h: AnyHandle, o?: object): Promise<void>; disconnect(): void };
 }
 const w = (typeof window === 'undefined' ? {} : window) as PickerWindow;
 
@@ -83,14 +87,15 @@ const stampOf = (f: File): FileStamp => ({ name: f.name, lastModified: f.lastMod
 /**
  * The folders that hold saves: the picked folder if it has .state files, else any
  * "Singleplayer" folder up to three levels down (so picking Midjiwan\Polytopia works too).
- * Multiplayer saves live elsewhere and are skipped.
+ * Multiplayer folders are never followed: a multiplayer save would offer other players' views.
  */
 async function saveFolders(dir: DirHandle): Promise<DirHandle[]> {
+  if (isMultiplayerFolder(dir.name)) return [];
   for await (const e of dir.values()) if (e.kind === 'file' && isStateFile(e.name)) return [dir];
   const out: DirHandle[] = [];
   const walk = async (d: DirHandle, depth: number) => {
     for await (const e of d.values()) {
-      if (e.kind !== 'directory') continue;
+      if (e.kind !== 'directory' || isMultiplayerFolder(e.name)) continue;
       if (e.name.toLowerCase() === 'singleplayer') out.push(e);
       else if (depth < 3) await walk(e, depth + 1);
     }
@@ -133,12 +138,13 @@ export async function findCurrent(src: Source, prefer?: string, rescan = false):
 
 /**
  * Calls `onChange` when the source changes on disk, using FileSystemObserver where the
- * browser has it. Returns a stop function, or null when observing isn't possible (poll then).
+ * browser has it, and `onBroken` if the observer stops working. Returns a stop function,
+ * or null when observing isn't possible (poll then).
  */
-export async function observe(src: Source, onChange: () => void): Promise<(() => void) | null> {
+export async function observe(src: Source, onChange: () => void, onBroken: () => void): Promise<(() => void) | null> {
   if (!canObserve) return null;
   try {
-    const obs = new w.FileSystemObserver!(() => onChange());
+    const obs = new w.FileSystemObserver!((records) => (records.some((r) => r.type === 'errored') ? onBroken() : onChange()));
     await obs.observe(src.handle, src.kind === 'folder' ? { recursive: true } : undefined);
     return () => obs.disconnect();
   } catch {
@@ -159,34 +165,45 @@ const DB = 'market-planner';
 const STORE = 'kv';
 const KEY = 'save-source';
 
-function openDb(): Promise<IDBDatabase> {
+/** Runs one transaction on the store and closes the database once it is done. */
+function withStore(mode: IDBTransactionMode, fn: (store: IDBObjectStore) => IDBRequest): Promise<unknown> {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB, 1);
-    req.onupgradeneeded = () => req.result.createObjectStore(STORE);
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
+    const open = indexedDB.open(DB, 1);
+    open.onupgradeneeded = () => open.result.createObjectStore(STORE);
+    open.onerror = () => reject(open.error);
+    open.onsuccess = () => {
+      const db = open.result;
+      try {
+        const tx = db.transaction(STORE, mode);
+        const req = fn(tx.objectStore(STORE));
+        tx.oncomplete = () => {
+          db.close();
+          resolve(req.result);
+        };
+        tx.onerror = tx.onabort = () => {
+          db.close();
+          reject(tx.error);
+        };
+      } catch (e) {
+        db.close();
+        reject(e);
+      }
+    };
   });
 }
 
 export async function loadStored(): Promise<StoredSource | null> {
   try {
-    const db = await openDb();
-    return await new Promise((resolve) => {
-      const req = db.transaction(STORE).objectStore(STORE).get(KEY);
-      req.onsuccess = () => resolve((req.result as StoredSource | undefined) ?? null);
-      req.onerror = () => resolve(null);
-    });
+    return ((await withStore('readonly', (s) => s.get(KEY))) as StoredSource | undefined) ?? null;
   } catch {
     return null;
   }
 }
 
+/** Remembers the source (null forgets it); resolves once it is written. */
 export async function saveStored(v: StoredSource | null) {
   try {
-    const db = await openDb();
-    const tx = db.transaction(STORE, 'readwrite');
-    if (v) tx.objectStore(STORE).put(v, KEY);
-    else tx.objectStore(STORE).delete(KEY);
+    await withStore('readwrite', (s) => (v ? s.put(v, KEY) : s.delete(KEY)));
   } catch {
     /* storage unavailable: the user picks the file again after a reload */
   }
