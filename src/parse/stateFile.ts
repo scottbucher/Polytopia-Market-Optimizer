@@ -66,8 +66,21 @@ export interface RawTile {
   improvement: number; // -1 none
   improvementLevel: number;
   city: RawCity | null;
+  /** The unit standing here, if any. */
+  unit: RawUnit | null;
+  /** A unit carried by `unit` (a land unit inside a boat), if any. */
+  passenger: RawUnit | null;
   /** Player ids that have seen this tile. */
   visibility: number[];
+}
+
+export interface RawUnit {
+  /** Player id of the unit's owner. */
+  owner: number;
+  /** Unit type id (the `idx` in the game's unit data). */
+  type: number;
+  x: number;
+  y: number;
 }
 
 export interface RawPlayer {
@@ -192,7 +205,26 @@ function readImprovementData(r: Reader): RawCity {
   return { level, population, production, borderSize, name };
 }
 
-const UNIT_SIZE = 42;
+/** One unit record: 42 bytes. */
+function readUnit(r: Reader): RawUnit {
+  r.u32(); // id
+  const owner = r.u8();
+  const type = r.u16();
+  r.skip(8); // follower and leader unit ids (Cymanti centipedes)
+  const x = r.i32();
+  const y = r.i32();
+  r.skip(8); // home coordinates
+  r.skip(6); // health, promotion level, experience
+  r.skip(3); // moved, attacked, flipped
+  r.u16(); // created turn
+  return { owner, type, x, y };
+}
+
+/** A unit's effects (u16 list) and its 5 direction bytes. */
+function skipUnitTail(r: Reader) {
+  r.skip(r.u16() * 2);
+  r.skip(5);
+}
 
 function readTile(r: Reader, ex: number, ey: number, version: number): RawTile {
   const x = r.u32();
@@ -212,16 +244,16 @@ function readTile(r: Reader, ex: number, ey: number, version: number): RawTile {
     city = readImprovementData(r);
     improvementLevel = city.level;
   }
+  let unit: RawUnit | null = null;
+  let passenger: RawUnit | null = null;
   if (r.u8() === 1) {
-    r.skip(UNIT_SIZE);
+    unit = readUnit(r);
     if (r.u8() === 1) {
-      r.skip(UNIT_SIZE);
+      passenger = readUnit(r);
       if (r.u8() !== 0) throw new Error('Unexpected passenger flag');
-      r.skip(r.u16() * 2);
-      r.skip(5);
+      skipUnitTail(r);
     }
-    r.skip(r.u16() * 2);
-    r.skip(5);
+    skipUnitTail(r);
   }
   const visN = r.u8();
   const visibility = Array.from(r.bytes(visN));
@@ -235,6 +267,8 @@ function readTile(r: Reader, ex: number, ey: number, version: number): RawTile {
   return {
     x, y, terrain, climate, owner, capitalOf, rulingCity, resource, improvement, improvementLevel,
     city: improvement === IMP_CITY ? city : null,
+    unit,
+    passenger,
     visibility,
   };
 }

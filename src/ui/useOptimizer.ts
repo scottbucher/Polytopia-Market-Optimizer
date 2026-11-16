@@ -1,15 +1,22 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { GameState, Goal } from '../model/types';
+import { type GameState, type Goal, turnNow } from '../model/types';
 import type { Plan } from '../solver/exact';
 import type { GoalResult } from '../solver/goals';
 import type { OptimizeResult } from '../solver/index';
 import type { WorkerRequest, WorkerResponse } from '../solver/protocol';
+import type { ChangeCount } from './describe';
 
 export interface Solved extends OptimizeResult {
   /** The state this was solved for (JSON), to tell when it is out of date. */
   stateKey: string;
   /** Changes on every solve. */
   runId: number;
+  /** The game turn it was solved on: a refresh can move the game on before you solve again. */
+  turn: number;
+  /** The map it was solved for: an out-of-date plan still names its cities and tiles as they were. */
+  state: GameState;
+  /** The change counts when the solve started: its note names only the changes after them. */
+  changes: ChangeCount;
 }
 
 /** Runs the optimizer in a worker. One job at a time: a new one cancels the last. */
@@ -49,10 +56,11 @@ export function useOptimizer(onError: (msg: string) => void) {
     [stop, onError],
   );
 
-  const solve = (state: GameState, goal: Goal, stateKey: string) => {
+  const solve = (state: GameState, goal: Goal, stateKey: string, changes: ChangeCount) => {
     setPicked(null);
+    const turn = turnNow(state);
     run({ type: 'solve', id: ++reqId.current, state, goal }, (r) => {
-      if (r.type === 'solve') setSolved({ ...r.result, stateKey, runId: r.id });
+      if (r.type === 'solve') setSolved({ ...r.result, stateKey, runId: r.id, turn, state, changes });
     });
   };
 

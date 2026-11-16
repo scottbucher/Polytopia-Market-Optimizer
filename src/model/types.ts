@@ -6,12 +6,30 @@ export interface Tile {
   improvement: Improvement;
   /** Index into GameState.cities when the tile is in one of the player's cities, else null. */
   city: number | null;
+  /**
+   * A unit of another player stands here, on a tile you can see. While it is there you
+   * can't build, destroy or change the terrain on this tile. Absent = no such unit.
+   */
+  enemy?: true;
 }
 
 export interface City {
   name: string;
   x: number;
   y: number;
+  /** City level (1 = just founded). Absent on hand-drawn maps until set. */
+  level?: number;
+  /**
+   * Population toward the next level (the filled pips under the city in the game).
+   * Below zero (red pips) after destroying buildings: each one costs 1★ per turn.
+   */
+  population?: number;
+  /**
+   * Stars per turn the city makes (its level, +1 per Workshop and Park, +1 for the
+   * capital), the most population below zero can take away. From the save; absent on
+   * hand-drawn maps, where the level stands in for it.
+   */
+  income?: number;
 }
 
 export interface Settings {
@@ -28,6 +46,8 @@ export interface Settings {
   allowDestroy: boolean;
   /** Let the plan buy new techs. Off = only use techs you own. */
   allowNewTech: boolean;
+  /** Count the rewards of cities levelling up from the plan's population. Unset = on. */
+  cityUpgrades?: boolean;
   costs: CostTable;
 }
 
@@ -38,8 +58,10 @@ export interface GameState {
   tiles: Tile[];
   cities: City[];
   settings: Settings;
-  /** Free-form info about where the state came from (file name, turn). */
+  /** Free-form info about where the state came from (the save's file name). */
   source?: string;
+  /** The game's current turn (from the save, or typed in). Plans show game turn numbers from it. */
+  turn?: number;
 }
 
 export type Goal =
@@ -47,6 +69,9 @@ export type Goal =
   | { kind: 'income'; income: number; turns: number }
   | { kind: 'bank'; stars: number; turns: number }
   | { kind: 'best-by'; turns: number };
+
+/** The game's current turn. Hand-drawn maps start at turn 1 until you set it. */
+export const turnNow = (state: Pick<GameState, 'turn'>) => state.turn ?? 1;
 
 export function idx(state: { width: number }, x: number, y: number) {
   return y * state.width + x;

@@ -3,9 +3,10 @@ import { decompressState, lz4DecompressBlock } from '../src/parse/lz4';
 import { compressState, compressStateLiteral, lz4CompressBlock } from './lz4Writer';
 import { parseStateFile, type RawSave, type RawTile } from '../src/parse/stateFile';
 import { humanPlayers, techsFromIdx, toGameState } from '../src/parse/toGameState';
+import { growthStart } from '../src/solver/cities';
 
 function fogTile(x: number, y: number, p: Partial<RawTile>): RawTile {
-  return { x, y, terrain: 3, climate: 1, owner: 0, capitalOf: 0, rulingCity: [-1, -1], resource: -1, improvement: -1, improvementLevel: 0, city: null, visibility: [1], ...p };
+  return { x, y, terrain: 3, climate: 1, owner: 0, capitalOf: 0, rulingCity: [-1, -1], resource: -1, improvement: -1, improvementLevel: 0, city: null, unit: null, passenger: null, visibility: [1], ...p };
 }
 import { type FakeTile, makeSave } from './saveWriter';
 
@@ -79,11 +80,42 @@ describe('save file', () => {
     expect(at(2, 2).improvement).toBe('market');
     expect(at(3, 3)).toMatchObject({ improvement: 'other', city: null }); // their market is no use to you
     expect(at(4, 4)).toMatchObject({ improvement: 'other', city: null });
-    expect(r.state.cities).toEqual([{ name: 'Home', x: 1, y: 1 }]);
+    expect(r.state.cities).toEqual([{ name: 'Home', x: 1, y: 1, level: 1, population: 1, income: 3 }]);
     expect(r.state.settings).toMatchObject({ stars: 9, baseIncome: 3, tribe: 'bardur' });
+    expect(r.state.turn).toBe(7);
     // nothing about the other player leaks into the state
     expect(JSON.stringify(r.state)).not.toMatch(/Their Town|Bot/);
     expect(r).not.toHaveProperty('hiddenResources');
+  });
+
+  it('reads the turn, city levels and the income your cities make', () => {
+    const tiles = world();
+    // Level 4 capital with 2 of the 5 population it needs, a Workshop and a Park (production 1 + 2).
+    tiles[1][1] = { ...tiles[1][1], level: 4, population: 2, production: 3, capitalOf: 1 };
+    const r = toGameState(parseStateFile(makeSave({ tiles, players: players([]), turn: 18 })), 1);
+    expect(r.state.turn).toBe(18);
+    expect(r.state.cities[0]).toMatchObject({ level: 4, population: 2 });
+    // level 4 + Workshop + Park + capital
+    expect(r.incomeEstimate).toBe(7);
+    expect(r.state.settings.baseIncome).toBe(7);
+    expect(r.state.cities[0].income).toBe(7);
+  });
+
+  it('keeps population in range, and population below zero takes from the whole city income', () => {
+    const read = (population: number) => {
+      const tiles = world();
+      tiles[1][1] = { ...tiles[1][1], level: 4, population, production: 3, capitalOf: 1 };
+      return toGameState(parseStateFile(makeSave({ tiles, players: players([]) })), 1);
+    };
+    // The city levels up at 5: a save never has more than 4, and nothing below -99 is kept.
+    expect(read(9).state.cities[0].population).toBe(4);
+    expect(read(-150).state.cities[0].population).toBe(-99);
+    // 3 below zero: 3★ less of the 7★ it makes, the same cap the plan uses.
+    expect(read(-3).incomeEstimate).toBe(4);
+    expect(read(-6).incomeEstimate).toBe(1);
+    expect(read(-150).incomeEstimate).toBe(0);
+    const s = read(-6).state;
+    expect(growthStart(s)).toMatchObject({ income: [7], pop: [-6] });
   });
 
   it('shows resources once you have the tech', () => {
@@ -233,6 +265,52 @@ describe('variable-length save fields', () => {
     const b = parseStateFile(makeSave({ tiles: busy, players: busyPlayers }));
     expect(b.players[0].name).toBe(longName);
     expect(b.players.map((p) => ({ ...p, name: '' }))).toEqual(a.players.map((p) => ({ ...p, name: '' })));
-    expect(b.tiles).toEqual(a.tiles);
+    const noUnits = (t: RawTile) => ({ ...t, unit: null, passenger: null });
+    expect(b.tiles.map((r) => r.map(noUnits))).toEqual(a.tiles);
+    expect(b.tiles[1][1]).toMatchObject({ unit: { owner: 1, type: 2, x: 1, y: 1 }, passenger: null });
+    expect(b.tiles[0][1]).toMatchObject({ unit: { owner: 1, type: 2, x: 1, y: 0 }, passenger: { owner: 1, type: 2 } });
+  });
+});
+
+describe('enemy units', () => {
+  // My warrior at (0,1); their warrior on my tile (2,1); their cloak on my tile (2,0);
+  // their boat carrying a warrior on my water tile (0,2); their mermaid cloak at (1,2);
+  // their dinghy (cloak boat) at (1,0) carrying a warrior; their warrior in their own
+  // territory (4,3); a unit on the tile I haven't explored (5,0).
+  function withUnits() {
+    const t = world();
+    t[1][0] = { ...t[1][0], unit: { type: 2 } };
+    t[1][2] = { ...t[1][2], unit: { owner: 2, type: 2 } };
+    t[0][2] = { ...t[0][2], unit: { owner: 2, type: 38 } };
+    t[2][0] = { ...t[2][0], unit: { owner: 2, type: 43, passenger: { type: 2 } } };
+    t[2][1] = { ...t[2][1], unit: { owner: 2, type: 50 } };
+    t[0][1] = { ...t[0][1], unit: { owner: 2, type: 39, passenger: true } };
+    t[3][4] = { ...t[3][4], unit: { owner: 2, type: 2 } };
+    t[0][5] = { ...t[0][5], unit: { owner: 2, type: 2 } };
+    return t;
+  }
+
+  it('reads unit owner, type and passengers', () => {
+    const save = parseStateFile(makeSave({ tiles: withUnits(), players: players([]) }));
+    const units = save.tiles.flat().filter((t) => t.unit);
+    expect(units).toHaveLength(8);
+    for (const t of units) expect(t.unit).toMatchObject({ x: t.x, y: t.y });
+    expect(save.tiles[1][0].unit).toMatchObject({ owner: 1, type: 2 });
+    expect(save.tiles[0][2].unit).toMatchObject({ owner: 2, type: 38 });
+    expect(save.tiles[2][0]).toMatchObject({ unit: { owner: 2, type: 43 }, passenger: { owner: 2, type: 2 } });
+    expect(save.tiles[0][1].passenger).toMatchObject({ owner: 2 });
+    expect(save.tiles[3][3].unit).toBeNull();
+  });
+
+  it('marks tiles with a visible unit of another player', () => {
+    const r = toGameState(parseStateFile(makeSave({ tiles: withUnits(), players: players([]) })), 1);
+    const enemy = r.state.tiles.flatMap((t, i) => (t.enemy ? [`${i % 6},${Math.floor(i / 6)}`] : []));
+    // Not my own unit, not cloaks or the dinghy, not the unexplored tile.
+    expect(enemy).toEqual(['2,1', '0,2', '4,3']);
+    expect(r.state.tiles.every((t) => t.enemy === undefined || t.enemy === true)).toBe(true);
+    // Seen from the other side, only my warrior shows.
+    const theirs = toGameState(parseStateFile(makeSave({ tiles: withUnits(), players: players([]) })), 2);
+    expect(theirs.state.tiles.filter((t) => t.enemy).length).toBe(1);
+    expect(theirs.state.tiles[6].enemy).toBe(true);
   });
 });

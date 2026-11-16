@@ -3,6 +3,7 @@
 
 import {
   type Improvement,
+  MIN_POPULATION,
   type Resource,
   REVEAL_TECH,
   TECH_IDX_ALIASES,
@@ -13,6 +14,7 @@ import {
   tribeFromIdx,
 } from '../data/rules';
 import { defaultSettings } from '../model/defaults';
+import { popPenalty } from '../solver/cities';
 import type { City, GameState, Tile } from '../model/types';
 import { IMP_CITY, type RawSave, type RawTile } from './stateFile';
 
@@ -48,6 +50,18 @@ const IMPROVEMENT: Record<number, Improvement> = {
   50: 'market',
 };
 
+/**
+ * Unit types other players can't see (the game's "hide" ability): cloak, cloak boat
+ * (dinghy) and mermaid cloak. Never shown, even when they stand in your territory.
+ */
+export const HIDDEN_UNITS = new Set([38, 39, 50]);
+
+/** A unit of another player that you can see stands on this tile. */
+function enemyOn(raw: RawTile, playerId: number) {
+  const u = raw.unit;
+  return !!u && u.owner !== playerId && !HIDDEN_UNITS.has(u.type);
+}
+
 export function techsFromIdx(ids: number[]): TechKey[] {
   const out = new Set<TechKey>();
   for (const i of ids) {
@@ -72,7 +86,7 @@ export function humanPlayers(save: RawSave): HumanPlayer[] {
 export interface LoadReport {
   state: GameState;
   hiddenTiles: number;
-  /** Sum of each city's stored production: a starting estimate of non-market income. */
+  /** Stars per turn from your cities (everything but markets): a starting estimate of non-market income. */
   incomeEstimate: number;
 }
 
@@ -89,8 +103,20 @@ export function toGameState(save: RawSave, playerId: number, fileName = 'save'):
     for (const t of row) {
       if (t.improvement === IMP_CITY && t.owner === playerId && t.visibility.includes(playerId)) {
         cityAt.set(`${t.x},${t.y}`, cities.length);
-        cities.push({ name: t.city?.name || `City ${cities.length + 1}`, x: t.x, y: t.y });
-        incomeEstimate += Math.max(0, t.city?.production ?? 0);
+        const city: City = { name: t.city?.name || `City ${cities.length + 1}`, x: t.x, y: t.y };
+        // A city makes its level in stars, plus 1 per Workshop and Park; the save's
+        // `production` is 1 + Workshops + Parks. The capital makes 1 more.
+        const made = Math.max(0, (t.city ? t.city.level + t.city.production - 1 : 0) + (t.capitalOf === playerId ? 1 : 0));
+        if (t.city && t.city.level >= 1) {
+          city.level = t.city.level;
+          // `population` is the progress toward the next level (the filled pips in the game);
+          // below zero after buildings were destroyed.
+          city.population = Math.max(MIN_POPULATION, Math.min(t.city.level, t.city.population));
+          city.income = made;
+        }
+        cities.push(city);
+        // Each population below zero takes 1★ off, down to nothing (as the planner counts it).
+        incomeEstimate += made - popPenalty(made, city.population ?? 0);
       }
     }
   }
@@ -128,7 +154,9 @@ export function toGameState(save: RawSave, playerId: number, fileName = 'save'):
       }
       // Buildings in other players' territory don't help you.
       if (city === null && improvement !== 'none' && improvement !== 'city') improvement = 'other';
-      tiles.push({ terrain: TERRAIN[raw.terrain] ?? 'unknown', resource, improvement, city });
+      const tile: Tile = { terrain: TERRAIN[raw.terrain] ?? 'unknown', resource, improvement, city };
+      if (tile.terrain !== 'unknown' && enemyOn(raw, playerId)) tile.enemy = true;
+      tiles.push(tile);
     }
   }
 
@@ -137,7 +165,8 @@ export function toGameState(save: RawSave, playerId: number, fileName = 'save'):
     height,
     tiles,
     cities,
-    source: `${fileName} · turn ${save.header.currentTurn}`,
+    source: fileName,
+    turn: save.header.currentTurn,
     settings: {
       ...defaultSettings(),
       tribe,

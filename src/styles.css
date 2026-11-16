@@ -19,18 +19,24 @@
   --halo: var(--panel);
   --shadow-pop: 0 6px 20px rgba(0, 0, 0, 0.15);
 
-  --t-field: #c9d58b;
-  --t-forest: #a9c47a;
-  --t-tree: #3f7a3a;
-  --t-mountain: #b9b2a3;
-  --t-mtn: #7d766a;
-  --t-water: #8cc5df;
-  --t-ocean: #5b92bd;
+  --t-field: #a6d46b;
+  --t-forest: #6aa84f;
+  --t-tree: #2e6b2a;
+  --t-mountain: #aeb1b4;
+  --t-mtn: #80858b;
+  --t-snow: #f7f9fb;
+  --t-water: #74c4ee;
+  --t-ocean: #3a7fd0;
   --t-ice: #e9f2f6;
   --t-wetland: #9fbf98;
-  --t-unknown: #4a4a52;
-  --tile-line: rgba(0, 0, 0, 0.12);
-  --fog-ink: #c4c4cc;
+  --t-unknown: #c3bdb0;
+  --tile-line: rgba(0, 0, 0, 0.14);
+  --side-land: #8a6545;
+  --side-water: #2f63a6;
+  --side-unknown: #a59f92;
+  --dim-opacity: 0.5;
+  --label-bg: rgba(255, 253, 248, 0.94);
+  --enemy: #d42a2a;
   --crop: #e2b100;
   --metal: #f2f2f2;
   --metal-stroke: #555555;
@@ -92,18 +98,24 @@
     --info-bg: #1d2836;
     --map-bg: #1c1d21;
     --shadow-pop: 0 6px 20px rgba(0, 0, 0, 0.5);
-    --t-field: #8b9a55;
-    --t-forest: #6f8b4b;
-    --t-tree: #2b5a28;
-    --t-mountain: #8a8478;
-    --t-mtn: #5c564c;
-    --t-water: #3f7f9e;
-    --t-ocean: #2c5677;
+    --t-field: #85bd52;
+    --t-forest: #4c8c3a;
+    --t-tree: #1f4d1d;
+    --t-mountain: #8e9399;
+    --t-mtn: #62676e;
+    --t-snow: #e8ebee;
+    --t-water: #4aa6dc;
+    --t-ocean: #2a62b0;
     --t-ice: #b9c6cc;
     --t-wetland: #5f7d5a;
-    --t-unknown: #2b2b31;
-    --tile-line: rgba(0, 0, 0, 0.3);
-    --fog-ink: #b0b0ba;
+    --t-unknown: #27282d;
+    --tile-line: rgba(0, 0, 0, 0.28);
+    --side-land: #5c4330;
+    --side-water: #1d4680;
+    --side-unknown: #1f2024;
+    --dim-opacity: 0.45;
+    --label-bg: rgba(33, 34, 38, 0.94);
+    --enemy: #ef4444;
     --b-support: #e8e3d6;
     color-scheme: dark;
   }
@@ -124,18 +136,24 @@
   --info-bg: #1d2836;
   --map-bg: #1c1d21;
   --shadow-pop: 0 6px 20px rgba(0, 0, 0, 0.5);
-  --t-field: #8b9a55;
-  --t-forest: #6f8b4b;
-  --t-tree: #2b5a28;
-  --t-mountain: #8a8478;
-  --t-mtn: #5c564c;
-  --t-water: #3f7f9e;
-  --t-ocean: #2c5677;
+  --t-field: #85bd52;
+  --t-forest: #4c8c3a;
+  --t-tree: #1f4d1d;
+  --t-mountain: #8e9399;
+  --t-mtn: #62676e;
+  --t-snow: #e8ebee;
+  --t-water: #4aa6dc;
+  --t-ocean: #2a62b0;
   --t-ice: #b9c6cc;
   --t-wetland: #5f7d5a;
-  --t-unknown: #2b2b31;
-  --tile-line: rgba(0, 0, 0, 0.3);
-  --fog-ink: #b0b0ba;
+  --t-unknown: #27282d;
+  --tile-line: rgba(0, 0, 0, 0.28);
+  --side-land: #5c4330;
+  --side-water: #1d4680;
+  --side-unknown: #1f2024;
+  --dim-opacity: 0.45;
+  --label-bg: rgba(33, 34, 38, 0.94);
+  --enemy: #ef4444;
   --b-support: #e8e3d6;
   color-scheme: dark;
 }
@@ -397,8 +415,15 @@ main {
   height: 22px;
   background: var(--line);
 }
-.toolbar .grow {
-  flex: 1;
+.toolbar .tools {
+  display: contents;
+}
+/* Game view, rotate, mirror and expand: kept together at the end of the row. */
+.toolbar .viewctl {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-left: auto;
 }
 .tool {
   padding: 4px 9px;
@@ -435,13 +460,29 @@ main {
 .sw.t-unknown { background: var(--t-unknown); border-color: var(--muted); }
 
 .mapwrap {
+  position: relative;
   background: var(--map-bg);
   border: 1px solid var(--line);
   border-top: none;
   border-bottom: none;
+}
+.mapview {
+  position: relative;
+}
+/* The map scrolls inside this box; zoom changes the drawing's size, not the box's. */
+.mapscroll {
   overflow: auto;
-  max-height: calc(100vh - 210px);
-  min-height: 300px;
+  height: calc(100vh - 230px);
+  min-height: 320px;
+  display: flex;
+  cursor: grab;
+}
+.mapscroll.editing {
+  cursor: crosshair;
+}
+.mapscroll.panning,
+.mapscroll.panning .map {
+  cursor: grabbing;
 }
 .map:focus-visible {
   outline: 3px solid var(--accent);
@@ -452,9 +493,43 @@ main {
 }
 .map {
   display: block;
-  width: 100%;
-  height: auto;
+  flex: none;
+  /* Centred while smaller than the box; scrolls from its edge once bigger. */
+  margin: auto;
   user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+.mapzoom {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  z-index: 2;
+}
+.mapzoom button {
+  background: var(--panel);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+}
+.maplegend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  align-items: center;
+  padding: 4px 10px;
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--muted);
+}
+.maplegend .lg {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.maplegend svg {
+  overflow: visible;
 }
 .mapfoot {
   display: flex;
@@ -466,6 +541,25 @@ main {
   border: 1px solid var(--line);
   border-radius: 0 0 10px 10px;
   margin-bottom: 12px;
+}
+/* Expand map: the map takes the full width and the side panel goes below it. */
+main:has(> .mapcol.wide) {
+  grid-template-columns: minmax(0, 1fr);
+}
+.mapcol.wide {
+  position: static;
+  max-height: none;
+  overflow: visible;
+}
+@media (max-width: 980px) {
+  /* One column already: nothing to expand. */
+  button.widebtn {
+    display: none;
+  }
+  .mapscroll {
+    height: 62vh;
+    min-height: 280px;
+  }
 }
 
 .tile .ground {
@@ -479,73 +573,93 @@ main {
 .tile.t-ocean .ground { fill: var(--t-ocean); }
 .tile.t-ice .ground { fill: var(--t-ice); }
 .tile.t-wetland .ground { fill: var(--t-wetland); }
-.tile.t-unknown .ground { fill: var(--t-unknown); }
+/* Unexplored: quiet, plain tiles. */
+.tile.t-unknown .ground {
+  fill: var(--t-unknown);
+  stroke: var(--t-unknown);
+}
+/* Outside your territory: dimmed, so your empire stands out. */
 .tile.dim {
-  opacity: 0.5;
+  opacity: var(--dim-opacity);
 }
 .tile:hover .ground {
-  filter: brightness(1.08);
+  filter: brightness(1.12);
 }
-.tile.just-painted .ground {
-  animation: paintflash 450ms ease-out;
+.side.s-land { fill: var(--side-land); }
+.side.s-water { fill: var(--side-water); }
+.side.s-unknown { fill: var(--side-unknown); }
+.side.r {
+  filter: brightness(0.8);
+}
+.flash {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 4;
+  animation: paintflash 450ms ease-out forwards;
 }
 @keyframes paintflash {
   from {
-    stroke: var(--accent);
-    stroke-width: 4;
+    stroke-width: 5;
+    opacity: 1;
   }
   to {
-    stroke: var(--tile-line);
     stroke-width: 1;
+    opacity: 0;
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .tile.just-painted .ground {
+  .flash {
     animation: none;
-    stroke: var(--accent);
     stroke-width: 3;
   }
 }
-.tree path {
+.tree {
   fill: var(--t-tree);
 }
-.mtn {
+.mtn path {
   fill: var(--t-mtn);
 }
-.fog {
-  fill: var(--fog-ink);
-  font-size: 11px;
-  text-anchor: middle;
+.mtn .snow {
+  fill: var(--t-snow);
 }
 .crop circle {
   fill: var(--crop);
-  stroke: rgba(0, 0, 0, 0.25);
+  stroke: rgba(0, 0, 0, 0.35);
 }
 .metal {
   fill: var(--metal);
   stroke: var(--metal-stroke);
+  stroke-width: 1.2;
 }
 .borders path {
   fill: none;
-  stroke-width: 2.5;
+  stroke-width: 4;
   stroke-linecap: round;
 }
+.borders path.under {
+  stroke: rgba(0, 0, 0, 0.45);
+  stroke-width: 6.5;
+}
 .bld rect {
-  stroke: rgba(0, 0, 0, 0.35);
+  stroke: rgba(0, 0, 0, 0.45);
   stroke-width: 1;
 }
 .bld text {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
   text-anchor: middle;
   fill: var(--b-ink);
 }
-.bld .inc {
-  fill: var(--ink);
-  font-size: 10px;
-  paint-order: stroke;
-  stroke: var(--panel);
-  stroke-width: 3px;
+.bld text.big {
+  font-size: 13px;
+}
+.bld text.big.inc {
+  font-size: 12px;
+}
+/* Buildings and enemies outside your territory: someone else's, so they step back. */
+.bld.out,
+.other.out {
+  opacity: 0.5;
 }
 .b-market text,
 .b-windmill text {
@@ -567,38 +681,82 @@ main {
 .b-aquafarm text {
   fill: var(--b-support-ink);
 }
+/* Planned buildings: a bold dashed outline on top of the colour. */
 .bld.ghost rect {
   stroke: var(--ink);
-  stroke-width: 1.6;
-  stroke-dasharray: 3 2;
+  stroke-width: 2.2;
+  stroke-dasharray: 4 2.5;
+}
+.bld.gone {
+  opacity: 0.55;
 }
 .other {
   fill: var(--other-fill);
-  opacity: 0.8;
+  stroke: rgba(0, 0, 0, 0.4);
 }
-.removed {
+.removed path {
+  fill: none;
   stroke: var(--removed);
   stroke-width: 3;
+  stroke-linecap: round;
 }
-.citynames text {
-  font-size: 11px;
-  font-weight: 700;
+.removed path.halo {
+  stroke: var(--halo);
+  stroke-width: 5.5;
+}
+.enemy circle {
+  fill: var(--enemy);
+  stroke: #fff;
+  stroke-width: 1.5;
+}
+.enemy path {
+  fill: #fff;
+}
+.citylabel .pill {
+  fill: var(--label-bg);
+  stroke-width: 2;
+}
+.citylabel text {
   text-anchor: middle;
+  font-weight: 700;
+}
+.citylabel .nm {
+  font-size: 12px;
   fill: var(--ink);
-  paint-order: stroke;
-  stroke: var(--panel);
-  stroke-width: 3px;
+}
+.citylabel .lv {
+  font-size: 11px;
+}
+.citylabel .pip {
+  stroke: rgba(0, 0, 0, 0.55);
+  stroke-width: 0.8;
+}
+.citylabel .pip:not(.on) {
+  fill: var(--label-bg);
+}
+/* Population below zero: red pips, as in the game. */
+.citylabel .pip.neg {
+  fill: #e03131;
+  stroke: #7d1414;
 }
 .city path {
-  stroke: rgba(0, 0, 0, 0.5);
+  stroke: rgba(0, 0, 0, 0.55);
+  stroke-width: 1.2;
 }
-.stepnum circle {
-  fill: var(--ink);
+.city .door {
+  fill: rgba(0, 0, 0, 0.45);
+  stroke: none;
+}
+.stepnum circle,
+.stepnum rect {
+  fill: var(--accent);
+  stroke: var(--accent-ink);
+  stroke-width: 1.5;
 }
 .stepnum text {
-  fill: var(--panel);
-  font-size: 10px;
-  font-weight: 700;
+  fill: var(--accent-ink);
+  font-size: 11px;
+  font-weight: 800;
   text-anchor: middle;
 }
 .hl-ring {
@@ -754,6 +912,17 @@ details.panel[open] > summary {
   width: 7ch;
   min-width: 64px;
 }
+.goal .by {
+  white-space: nowrap;
+}
+.goal .deadline {
+  display: inline;
+}
+.goal .deadline.warn {
+  display: block;
+  flex-basis: 100%;
+  color: var(--warn);
+}
 .toggles {
   border: none;
   padding: 0;
@@ -893,6 +1062,21 @@ details.panel[open] > summary {
 .step .after .unit {
   font-size: var(--text-xs);
 }
+.levelup {
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  gap: var(--space-1);
+  font-size: 13px;
+  color: var(--muted);
+  padding: 2px var(--space-1) 4px 0;
+}
+.levelup .icon-up {
+  text-align: center;
+}
+.upgrades {
+  font-size: 13px;
+  margin: 10px 0 0;
+}
 .step.done .what {
   text-decoration: line-through;
   color: var(--muted);
@@ -954,7 +1138,9 @@ details.panel[open] > summary {
     position: sticky;
     top: 0;
     z-index: 3;
-    max-height: 45vh;
+  }
+  .mapcol:has(.shot-panel[open]) .mapscroll {
+    height: 45vh;
   }
 }
 .row {
@@ -964,7 +1150,7 @@ details.panel[open] > summary {
 }
 .cities {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr));
   gap: 8px;
 }
 .cities label {
@@ -974,6 +1160,29 @@ details.panel[open] > summary {
 }
 .cities input {
   flex: 1;
+}
+.city-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  align-items: center;
+}
+.city-row > label {
+  flex: 1 1 140px;
+}
+.city-growth {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  font-size: 13px;
+}
+.cities .pop {
+  gap: 2px;
+}
+.cities .pop input {
+  flex: none;
+  width: 5ch;
+  min-width: 48px;
 }
 .dot {
   width: 10px;
@@ -1049,13 +1258,21 @@ footer {
     grid-template-columns: 1fr;
     gap: 2px;
   }
-  /* The toolbar scrolls sideways instead of filling the first screen. */
-  .toolbar {
-    flex-wrap: nowrap;
+  /* The paint tools scroll sideways instead of filling the first screen; the view
+     controls get a row of their own so they're never a long swipe away. */
+  .toolbar .tools {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    flex: 1 0 100%;
+    min-width: 0;
     overflow-x: auto;
     scroll-snap-type: x proximity;
+    /* Room for the focus ring inside the scrolling box. */
+    padding: 3px;
+    margin: -3px;
   }
-  .toolbar > * {
+  .toolbar .tools > * {
     flex: none;
   }
 }
@@ -1103,8 +1320,55 @@ footer {
   .goal input[type='radio'] {
     margin-top: 0;
   }
+  /* The whole 44px square takes the tap: the real checkbox fills it, invisible, over a drawn box. */
   .step .check {
+    position: relative;
     min-width: 44px;
+    min-height: 44px;
+  }
+  .step .check input {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    opacity: 0;
+    cursor: pointer;
+  }
+  .step .check::before {
+    content: '';
+    width: 20px;
+    height: 20px;
+    box-sizing: border-box;
+    border: 2px solid var(--line-strong);
+    border-radius: 4px;
+    background: var(--panel);
+  }
+  .step.done .check::before {
+    background: var(--accent);
+    border-color: var(--accent);
+  }
+  .step.done .check::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 5px;
+    height: 10px;
+    border: solid var(--accent-ink);
+    border-width: 0 2.5px 2.5px 0;
+    transform: translate(-50%, -62%) rotate(45deg);
+  }
+  .step .check:has(input:focus-visible)::before {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  .mapfoot label {
+    min-height: 44px;
+  }
+  .loadsave .others summary {
+    display: flex;
+    align-items: center;
     min-height: 44px;
   }
   .steprow {
@@ -1131,12 +1395,6 @@ footer {
 .maplabels .stepnum text {
   stroke: none;
 }
-.maplabels .inc {
-  font-size: 11px;
-  font-weight: 700;
-  text-anchor: middle;
-  fill: var(--ink);
-}
 .stale-note {
   margin: 0 0 8px;
 }
@@ -1157,4 +1415,122 @@ footer {
 .frontier .pickbtn:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+
+/* ---------- Load game save and save sync ---------- */
+.loadsave summary.btn.accent {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-color: transparent;
+}
+.loadsave summary.btn.accent:hover {
+  filter: brightness(1.08);
+}
+.loadsave .pop {
+  width: 400px;
+  gap: var(--space-2);
+}
+.loadsave .pop h3 {
+  margin: var(--space-2) 0 0;
+}
+.loadsave .pop p {
+  margin: 0;
+}
+.loadbtns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.loadsave .hint {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.pathrow {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+}
+.pathrow code {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: normal;
+  font-size: var(--text-xs);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 3px 6px;
+  user-select: all;
+}
+button.small-btn {
+  font-size: var(--text-sm);
+  padding: 2px 8px;
+  min-height: 28px;
+}
+@media (pointer: coarse) {
+  button.small-btn {
+    min-height: var(--control-h);
+  }
+}
+.loadsave .others {
+  border-top: 1px solid var(--line);
+  padding-top: var(--space-2);
+}
+.loadsave .others summary {
+  cursor: pointer;
+  color: var(--accent);
+}
+.loadsave .others[open] > div {
+  margin-top: var(--space-2);
+}
+
+.syncbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-1) var(--space-3);
+  margin-bottom: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--panel);
+  font-size: var(--text-sm);
+}
+.syncinfo {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--space-2);
+  align-items: baseline;
+  min-width: 0;
+}
+.syncfile {
+  font-weight: 600;
+  max-width: 22ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.syncctl {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  align-items: center;
+}
+.syncctl button:not(.link) {
+  min-height: 30px;
+  padding: 2px 10px;
+}
+@media (pointer: coarse) {
+  .syncctl button:not(.link) {
+    min-height: var(--control-h);
+  }
+}
+.syncmsg {
+  flex-basis: 100%;
+  margin: 0;
+}
+.err-text {
+  color: var(--err);
 }

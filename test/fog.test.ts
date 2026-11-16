@@ -3,7 +3,7 @@ import type { RawSave, RawTile } from '../src/parse/stateFile';
 import { toGameState } from '../src/parse/toGameState';
 
 function tile(x: number, y: number, p: Partial<RawTile>): RawTile {
-  return { x, y, terrain: 3, climate: 1, owner: 0, capitalOf: 0, rulingCity: [-1, -1], resource: -1, improvement: -1, improvementLevel: 0, city: null, visibility: [], ...p };
+  return { x, y, terrain: 3, climate: 1, owner: 0, capitalOf: 0, rulingCity: [-1, -1], resource: -1, improvement: -1, improvementLevel: 0, city: null, unit: null, passenger: null, visibility: [], ...p };
 }
 
 describe('no spoilers', () => {

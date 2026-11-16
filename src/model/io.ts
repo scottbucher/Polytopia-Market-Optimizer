@@ -1,4 +1,4 @@
-import { BUILDING_KINDS, type CostTable, DEFAULT_COSTS, type Improvement, type Resource, TECHS, type TechKey, type Terrain, TRIBE_BY_KEY } from '../data/rules';
+import { BUILDING_KINDS, type CostTable, DEFAULT_COSTS, type Improvement, MIN_POPULATION, type Resource, TECHS, type TechKey, type Terrain, TRIBE_BY_KEY } from '../data/rules';
 import { defaultSettings } from './defaults';
 import type { City, GameState, Settings, Tile } from './types';
 
@@ -61,16 +61,18 @@ export function parseJson(text: string): GameState {
   (Array.isArray(s.cities) ? s.cities : []).forEach((c, i) => {
     if (!c || !Number.isInteger(c.x) || !Number.isInteger(c.y) || c.x < 0 || c.y < 0 || c.x >= w! || c.y >= h!) return;
     newIndex.set(i, cities.length);
-    cities.push({ name: typeof c.name === 'string' ? c.name : `City ${cities.length + 1}`, x: c.x, y: c.y });
+    cities.push({ name: typeof c.name === 'string' ? c.name : `City ${cities.length + 1}`, x: c.x, y: c.y, ...cityGrowth(c) });
   });
   const tiles: Tile[] = s.tiles.map((t) => {
     const city = t?.city;
-    return {
+    const tile: Tile = {
       terrain: pick(t?.terrain, TERRAINS, 'unknown'),
       resource: pick(t?.resource, RESOURCES, 'none'),
       improvement: pick(t?.improvement, IMPROVEMENTS, 'none'),
       city: Number.isInteger(city) ? (newIndex.get(city!) ?? null) : null,
     };
+    if (t?.enemy === true && tile.terrain !== 'unknown') tile.enemy = true;
+    return tile;
   });
   const d = defaultSettings();
   const ss = (s.settings ?? {}) as Partial<Settings>;
@@ -89,9 +91,22 @@ export function parseJson(text: string): GameState {
     allowGrow: typeof ss.allowGrow === 'boolean' ? ss.allowGrow : d.allowGrow,
     allowDestroy: typeof ss.allowDestroy === 'boolean' ? ss.allowDestroy : d.allowDestroy,
     allowNewTech: typeof ss.allowNewTech === 'boolean' ? ss.allowNewTech : d.allowNewTech,
+    ...(ss.cityUpgrades === false && { cityUpgrades: false }),
     costs,
   };
-  return { width: w!, height: h!, tiles, cities, settings, source: typeof s.source === 'string' ? s.source : undefined };
+  const turn = Number.isInteger(s.turn) && s.turn! >= 0 && s.turn! <= 100_000 ? s.turn : undefined;
+  return { width: w!, height: h!, tiles, cities, settings, source: typeof s.source === 'string' ? s.source : undefined, ...(turn !== undefined && { turn }) };
+}
+
+/** A city's level, population and income, when they are known and make sense. */
+function cityGrowth(c: Partial<City>): Pick<City, 'level' | 'population' | 'income'> {
+  const level = c.level;
+  if (!Number.isInteger(level) || level! < 1 || level! > 999) return {};
+  const pop = Number.isInteger(c.population) ? c.population! : 0;
+  // A city levels up once its population reaches level + 1; it can be below zero.
+  const out: Pick<City, 'level' | 'population' | 'income'> = { level, population: Math.min(level!, Math.max(MIN_POPULATION, pop)) };
+  if (Number.isInteger(c.income)) out.income = Math.min(9999, Math.max(0, c.income!));
+  return out;
 }
 
 export function download(name: string, text: string) {

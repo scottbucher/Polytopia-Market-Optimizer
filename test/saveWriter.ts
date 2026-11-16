@@ -10,12 +10,22 @@ export interface FakeTile {
   improvement?: number; // 1 city, 50 market, ...
   cityName?: string;
   production?: number;
+  level?: number;
+  population?: number;
+  /** Player id whose capital this is. */
+  capitalOf?: number;
   seenBy?: number[];
-  /** A unit stands here (optionally carrying a passenger). */
-  unit?: { passenger?: boolean };
+  /** A unit stands here (optionally carrying a passenger). Owner defaults to the tile's owner, type to a warrior (2). */
+  unit?: FakeUnit & { passenger?: boolean | FakeUnit };
   rewards?: number;
   rebellion?: number;
   flooded?: boolean;
+}
+
+export interface FakeUnit {
+  owner?: number;
+  /** Unit type id: 2 warrior, 38 cloak, 43 transport ship, ... */
+  type?: number;
 }
 
 export interface FakePlayer {
@@ -51,6 +61,25 @@ class W {
   zeros(n: number) { for (let i = 0; i < n; i++) this.u8(0); }
 }
 
+/** One 42-byte unit record. */
+function unit(w: W, u: FakeUnit, owner: number, x: number, y: number, type: number) {
+  w.u32(0x01020304); // id
+  w.u8(u.owner ?? owner);
+  w.u16(u.type ?? type);
+  w.filler(8); // follower and leader ids
+  w.i32(x);
+  w.i32(y);
+  w.i32(x); // home
+  w.i32(y);
+  w.u16(100); // health
+  w.u16(0); // promotion
+  w.u16(3); // experience
+  w.u8(1); // moved
+  w.u8(0); // attacked
+  w.u8(0); // flipped
+  w.u16(5); // created turn
+}
+
 function block(w: W, version: number, turn: number, size: number, tiles: FakeTile[][], players: FakePlayer[]) {
   w.u32(version);
   w.u16(0); // actions
@@ -69,7 +98,7 @@ function block(w: W, version: number, turn: number, size: number, tiles: FakeTil
       w.u16(1); // climate
       w.u16(0); // altitude
       w.u8(t.owner ?? 0);
-      w.u8(0); // capital of
+      w.u8(t.capitalOf ?? 0); // capital of
       w.i32(t.ruling?.[0] ?? -1);
       w.i32(t.ruling?.[1] ?? -1);
       if (t.resource !== undefined) {
@@ -79,9 +108,9 @@ function block(w: W, version: number, turn: number, size: number, tiles: FakeTil
       if (t.improvement !== undefined) {
         w.u8(1);
         w.u16(t.improvement);
-        w.u16(1); // level
+        w.u16(t.level ?? 1); // level
         w.u16(0); // founded
-        w.u16(1); // population
+        w.u16(t.population ?? 1); // population
         w.u16(1); // total population
         w.u16(t.production ?? 0);
         w.u16(0); // base score
@@ -100,10 +129,11 @@ function block(w: W, version: number, turn: number, size: number, tiles: FakeTil
       } else w.u8(0);
       if (t.unit) {
         w.u8(1);
-        w.filler(42); // unit
+        unit(w, t.unit, t.owner ?? 0, x, y, 2);
         if (t.unit.passenger) {
           w.u8(1);
-          w.filler(42); // passenger
+          // A passenger's own coordinates can be stale in real saves.
+          unit(w, t.unit.passenger === true ? {} : t.unit.passenger, t.unit.owner ?? t.owner ?? 0, x + 1, y, 2);
           w.u8(0);
           w.u16(1);
           w.u16(0x3333); // passenger's history
