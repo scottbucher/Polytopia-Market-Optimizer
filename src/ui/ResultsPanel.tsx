@@ -3,8 +3,9 @@ import { techName } from '../data/rules';
 import type { GameState } from '../model/types';
 import type { Plan } from '../solver/exact';
 import type { GoalResult } from '../solver/goals';
+import { enemyBlocked } from '../solver/options';
 import type { Step } from '../solver/schedule';
-import { describeAction, plural, starText } from './describe';
+import { describeAction, enemyNote, plural, starText } from './describe';
 
 interface Props {
   state: GameState;
@@ -34,6 +35,7 @@ export function ResultsPanel({ state, result, frontier, currentIncome, selected,
   const finalIncome = result.schedule.finalIncome;
   const gain = finalIncome - currentIncome;
   const payback = gain > 0 ? Math.ceil(spend / gain) : null;
+  const blockedNote = useMemo(() => enemyNote(enemyBlocked(state).length), [state]);
 
   const byTurn = useMemo(() => {
     const m = new Map<number, { step: Step; n: number }[]>();
@@ -50,6 +52,7 @@ export function ResultsPanel({ state, result, frontier, currentIncome, selected,
       <p className={`summary${result.met ? '' : ' warn'}`} aria-live="polite">
         {result.summary}
       </p>
+      {blockedNote && !stale && <p className="small note">{blockedNote}</p>}
       <div className="stats">
         <Stat label="Market income" value={`${currentIncome} → ${finalIncome}★`} sub={gain > 0 ? `+${gain} per turn` : 'no change'} />
         <Stat

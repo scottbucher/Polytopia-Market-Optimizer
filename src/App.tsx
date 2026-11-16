@@ -112,8 +112,8 @@ export default function App() {
   const paint = (i: number, first: boolean) => {
     if (first) setPinTile(null);
     if (tool.kind === 'look' || i < 0 || i >= state.tiles.length) return;
-    // Cities and resources toggle, so dragging would flip them on every tile it passes.
-    if (!first && (tool.kind === 'city' || tool.kind === 'resource')) return;
+    // Cities, resources and enemy units toggle, so dragging would flip them on every tile it passes.
+    if (!first && (tool.kind === 'city' || tool.kind === 'resource' || tool.kind === 'enemy')) return;
     update((st) => applyTool(st, tool, i));
     setLastPaint((p) => ({ tile: i, n: (p?.n ?? 0) + 1 }));
   };
@@ -355,6 +355,9 @@ export default function App() {
             <ToolBtn active={tool.kind === 'city'} onClick={() => pickTool({ kind: 'city' })} title="Tap a tile to add or remove a city">
               City
             </ToolBtn>
+            <ToolBtn active={tool.kind === 'enemy'} onClick={() => pickTool({ kind: 'enemy' })} title="Tap a tile to add or remove an enemy unit. The plan leaves those tiles alone.">
+              Enemy unit
+            </ToolBtn>
             <select
               aria-label="Territory"
               value={tool.kind === 'territory' ? String(tool.city) : ''}
@@ -594,6 +597,7 @@ function describeTile(state: GameState, i: number) {
   const parts = [where(state, i), t.terrain === 'unknown' ? 'unexplored' : t.terrain];
   if (t.resource !== 'none') parts.push(t.resource);
   if (t.improvement !== 'none') parts.push(t.improvement === 'other' ? 'other building' : t.improvement);
+  if (t.enemy) parts.push('enemy unit');
   if (t.city === null && t.terrain !== 'unknown') parts.push('not your territory');
   return parts.join(' · ');
 }

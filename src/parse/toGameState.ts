@@ -48,6 +48,18 @@ const IMPROVEMENT: Record<number, Improvement> = {
   50: 'market',
 };
 
+/**
+ * Unit types other players can't see (the game's "hide" ability): cloak, cloak boat
+ * (dinghy) and mermaid cloak. Never shown, even when they stand in your territory.
+ */
+export const HIDDEN_UNITS = new Set([38, 39, 50]);
+
+/** A unit of another player that you can see stands on this tile. */
+function enemyOn(raw: RawTile, playerId: number) {
+  const u = raw.unit;
+  return !!u && u.owner !== playerId && !HIDDEN_UNITS.has(u.type);
+}
+
 export function techsFromIdx(ids: number[]): TechKey[] {
   const out = new Set<TechKey>();
   for (const i of ids) {
@@ -128,7 +140,9 @@ export function toGameState(save: RawSave, playerId: number, fileName = 'save'):
       }
       // Buildings in other players' territory don't help you.
       if (city === null && improvement !== 'none' && improvement !== 'city') improvement = 'other';
-      tiles.push({ terrain: TERRAIN[raw.terrain] ?? 'unknown', resource, improvement, city });
+      const tile: Tile = { terrain: TERRAIN[raw.terrain] ?? 'unknown', resource, improvement, city };
+      if (tile.terrain !== 'unknown' && enemyOn(raw, playerId)) tile.enemy = true;
+      tiles.push(tile);
     }
   }
 

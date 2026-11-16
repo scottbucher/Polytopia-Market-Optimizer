@@ -27,3 +27,10 @@ export function starText(cost: number) {
 }
 
 export const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+
+/** Note for the plan when enemy units stand on tiles the plan could otherwise change. */
+export function enemyNote(n: number) {
+  if (n <= 0) return '';
+  const tiles = n === 1 ? '1 of your tiles has an enemy unit on it, so the plan leaves it alone.' : `${n} of your tiles have enemy units on them, so the plan leaves them alone.`;
+  return `${tiles} Refresh your save once they move.`;
+}

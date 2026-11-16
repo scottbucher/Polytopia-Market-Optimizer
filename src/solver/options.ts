@@ -115,7 +115,11 @@ export function makeTechBiller(state: GameState) {
 
 export type TechBiller = ReturnType<typeof makeTechBiller>;
 
-/** Every way to use a tile. The first option always keeps the tile as it is. */
+/**
+ * Every way to use a tile. The first option always keeps the tile as it is.
+ * This is the one place that decides what the plan may change: everything else
+ * (the exact search, the global search, the build order) only uses these options.
+ */
 export function tileOptions(state: GameState, i: number): TileOption[] {
   const tile: Tile = state.tiles[i];
   const s = state.settings;
@@ -128,7 +132,9 @@ export function tileOptions(state: GameState, i: number): TileOption[] {
   const opts: TileOption[] = [{ build: isBuildingKind(existing) ? existing : null, ops: [], keep: true, cost: 0, techs: [] }];
 
   // Temples, ports, monuments and the like are never torn down for a market.
-  if (existing === 'other') return opts;
+  // With an enemy unit on the tile you can't build, destroy or change the terrain;
+  // its building still earns.
+  if (existing === 'other' || tile.enemy) return opts;
   const hasBuilding = existing !== 'none';
   if (hasBuilding && !s.allowDestroy) return opts;
 
@@ -157,4 +163,16 @@ export function tileOptions(state: GameState, i: number): TileOption[] {
 
   if (!s.allowNewTech) return opts.filter((o) => o.techs.every((t) => isOwned(state, t)));
   return opts;
+}
+
+/** Your tiles that the plan could change if the enemy unit on them weren't there. */
+export function enemyBlocked(state: GameState): number[] {
+  const out: number[] = [];
+  state.tiles.forEach((t, i) => {
+    if (!t.enemy) return;
+    const tiles = [...state.tiles];
+    tiles[i] = { ...t, enemy: false };
+    if (tileOptions({ ...state, tiles }, i).length > 1) out.push(i);
+  });
+  return out;
 }

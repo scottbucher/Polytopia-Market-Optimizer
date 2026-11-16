@@ -80,7 +80,7 @@ describe('pinned rules and tables', () => {
   });
 
   it('tiles stay with their ruling city, not the nearest', () => {
-    const t = (x: number, p: Partial<RawTile>): RawTile => ({ x, y: 0, terrain: 3, climate: 1, owner: 1, capitalOf: 0, rulingCity: [0, 0], resource: -1, improvement: -1, improvementLevel: 0, city: null, visibility: [1], ...p });
+    const t = (x: number, p: Partial<RawTile>): RawTile => ({ x, y: 0, terrain: 3, climate: 1, owner: 1, capitalOf: 0, rulingCity: [0, 0], resource: -1, improvement: -1, improvementLevel: 0, city: null, unit: null, passenger: null, visibility: [1], ...p });
     const city = { level: 1, population: 0, production: 0, borderSize: 1, name: '' };
     const save: RawSave = { header: { version: 124, currentTurn: 1, mapName: 'x', width: 5, height: 1 }, warnings: [],
       players: [{ id: 1, name: 'me', autoPlay: false, tribe: 4, stars: 0, score: 0, numCities: 2, techs: [] }],

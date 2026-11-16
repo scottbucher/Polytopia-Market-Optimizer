@@ -65,12 +65,14 @@ export function parseJson(text: string): GameState {
   });
   const tiles: Tile[] = s.tiles.map((t) => {
     const city = t?.city;
-    return {
+    const tile: Tile = {
       terrain: pick(t?.terrain, TERRAINS, 'unknown'),
       resource: pick(t?.resource, RESOURCES, 'none'),
       improvement: pick(t?.improvement, IMPROVEMENTS, 'none'),
       city: Number.isInteger(city) ? (newIndex.get(city!) ?? null) : null,
     };
+    if (t?.enemy === true && tile.terrain !== 'unknown') tile.enemy = true;
+    return tile;
   });
   const d = defaultSettings();
   const ss = (s.settings ?? {}) as Partial<Settings>;

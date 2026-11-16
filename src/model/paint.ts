@@ -9,6 +9,7 @@ export type Tool =
   | { kind: 'resource'; v: Resource }
   | { kind: 'building'; v: BuildingKind | 'none' | 'other' }
   | { kind: 'city' }
+  | { kind: 'enemy' }
   | { kind: 'territory'; city: number | null };
 
 /** The terrain each resource sits on (the first one is used when painting the resource). */
@@ -33,6 +34,7 @@ export function applyTool(st: GameState, tool: Tool, i: number): GameState {
       if (tool.v === 'unknown') {
         t.resource = 'none';
         t.improvement = 'none';
+        delete t.enemy;
       }
       return st;
     }
@@ -54,6 +56,11 @@ export function applyTool(st: GameState, tool: Tool, i: number): GameState {
       }
       return st;
     }
+    case 'enemy':
+      // Toggles. You can't see units on tiles you haven't explored.
+      if (t.enemy) delete t.enemy;
+      else if (t.terrain !== 'unknown') t.enemy = true;
+      return st;
     case 'territory':
       if (t.improvement === 'city') return st;
       if (tool.city !== null && (tool.city < 0 || tool.city >= st.cities.length)) return st;

@@ -7,7 +7,8 @@ It runs entirely in your browser. Nothing is uploaded.
 ## What it does
 
 - **Load your game without spoilers.** Open your `.state` save file. The planner keeps only the tiles you have explored, and hides crops until you have Organization (or Farming, for Zebasi) and metal until you have Climbing, just like the game does. Water crops are only shown to Aquarion.
-- **Or draw your map.** Paint terrain, crops, metal, buildings, cities and territory by hand.
+- **Enemy units.** A unit of another player standing on one of your tiles stops you building, destroying or changing the terrain there, so the plan leaves that tile alone (its building still earns). Cloaks and other hidden units are never shown. Load your save again once they move.
+- **Or draw your map.** Paint terrain, crops, metal, buildings, cities, territory and enemy units by hand.
 - **Screenshot import (best effort).** Put a screenshot under the map, line up the grid, paint a few tiles of each terrain, and the planner guesses the rest from the screenshot's colours.
 - **Pick a goal:**
   - *Most market income*: the highest stars per turn, at the lowest cost for that income.
@@ -34,6 +35,7 @@ Defaults come from the game's own logic data, and you can change all of them in 
 - Each city can have one market, sawmill, windmill and forge.
 - Market, sawmill, windmill, forge, farm and mine cost 5★. A lumber hut costs 3★.
 - Clearing a forest gives 1★ back (Forestry). Burning a forest costs 3★ and leaves a field with crops (Construction). Growing a forest costs 5★ (Spiritualism).
+- You can't build, destroy, or clear, burn or grow forest on a tile with an enemy unit on it. The planner treats every other player's visible unit this way, allies included.
 - Polaris and Cymanti don't build markets, so the planner doesn't apply to them. Elyrion can't clear or burn forest.
 
 Not modelled:
