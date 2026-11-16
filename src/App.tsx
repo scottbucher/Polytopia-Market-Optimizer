@@ -12,7 +12,7 @@ import { income } from './solver/income';
 import { techPrice } from './solver/options';
 import { layoutAfter } from './solver/schedule';
 import { plural, where } from './ui/describe';
-import { type Backdrop, cityColor, MapView, type Overlay, type View } from './ui/MapView';
+import { type Backdrop, cityColor, GAME_VIEW, isGameView, loadView, MapView, type Overlay, readPref, saveView, type View, writePref } from './ui/MapView';
 import { NumberField } from './ui/NumberField';
 import { ResultsPanel } from './ui/ResultsPanel';
 import { ScreenshotPanel } from './ui/ScreenshotPanel';
@@ -35,6 +35,8 @@ type GoalsByKind = { [K in GoalKind]: Extract<Goal, { kind: K }> };
 
 const TERRAIN_KEYS: Record<string, Terrain> = { '1': 'field', '2': 'forest', '3': 'mountain', '4': 'water', '5': 'ocean', '6': 'unknown' };
 
+const WIDE_KEY = 'market-planner/map-wide/v1';
+
 const FIRST_RUN =
   'This is an example map. Press Find the best layout to see a plan, or start your own: Load game save reads your game, New map lets you paint one.';
 
@@ -45,7 +47,9 @@ export default function App() {
   });
   const [state, setState] = useState<GameState>(initial.state);
   const [tool, setTool] = useState<Tool>({ kind: 'look' });
-  const [view, setView] = useState<View>({ rot: 0, flip: false });
+  const [view, setView] = useState<View>(loadView);
+  useEffect(() => saveView(view), [view]);
+  const [wideMap, setWideMap] = useState(() => readPref<unknown>(WIDE_KEY, false) === true);
   // One goal per kind, so switching goal type and back keeps the numbers you typed.
   const [goalKind, setGoalKind] = useState<GoalKind>('max');
   const [goals, setGoals] = useState<GoalsByKind>(() => ({
@@ -314,9 +318,9 @@ export default function App() {
       )}
 
       <main>
-        <section className="mapcol">
+        <section className={`mapcol${wideMap ? ' wide' : ''}`}>
           <div className="toolbar" role="group" aria-label="Map tools">
-            <ToolBtn active={tool.kind === 'look'} onClick={() => pickTool({ kind: 'look' })} title="Look around and scroll without changing the map (M)">
+            <ToolBtn active={tool.kind === 'look'} onClick={() => pickTool({ kind: 'look' })} title="Look around without changing the map: drag to move, Ctrl + wheel to zoom (M)">
               Move
             </ToolBtn>
             <span className="sep" />
@@ -371,6 +375,9 @@ export default function App() {
               <option value="null">Not yours</option>
             </select>
             <span className="grow" />
+            <ToolBtn active={isGameView(view)} onClick={() => setView({ ...GAME_VIEW })} title="Turn the map the way the game shows it">
+              Game view
+            </ToolBtn>
             <button type="button" className="icon" title="Rotate map" aria-label="Rotate map" onClick={() => setView({ ...view, rot: ((view.rot + 1) % 4) as View['rot'] })}>
               <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
                 <path d="M13 8a5 5 0 1 1-1.6-3.7M13 2.5v3h-3" />
@@ -382,11 +389,26 @@ export default function App() {
                 <path className="solid" d="M6 4 2 8l4 4V4zM10 4l4 4-4 4V4z" />
               </svg>
             </button>
+            <button
+              type="button"
+              className="icon widebtn"
+              title={wideMap ? 'Narrow map' : 'Expand map'}
+              aria-label="Expand map"
+              aria-pressed={wideMap}
+              onClick={() => {
+                setWideMap(!wideMap);
+                writePref(WIDE_KEY, !wideMap);
+              }}
+            >
+              <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+                {wideMap ? <path d="M1.5 8h4.5M14.5 8H10M4 5.5 6.5 8 4 10.5M12 5.5 9.5 8l2.5 2.5" /> : <path d="M1.5 8h13M4.5 5 1.5 8l3 3M11.5 5l3 3-3 3" />}
+              </svg>
+            </button>
           </div>
-          {coarse && tool.kind !== 'look' && <p className="paint-hint small">Painting: dragging paints tiles. Choose Move to scroll the map.</p>}
+          {coarse && tool.kind !== 'look' && <p className="paint-hint small">Painting: dragging paints tiles. Choose Move to scroll the map. Pinch to zoom.</p>}
           <div className="mapwrap">
             <MapView
-              key={`${state.width}x${state.height}`}
+              key={`${mapId}-${state.width}x${state.height}`}
               state={state}
               view={view}
               overlay={overlay}
@@ -594,6 +616,7 @@ function describeTile(state: GameState, i: number) {
   const parts = [where(state, i), t.terrain === 'unknown' ? 'unexplored' : t.terrain];
   if (t.resource !== 'none') parts.push(t.resource);
   if (t.improvement !== 'none') parts.push(t.improvement === 'other' ? 'other building' : t.improvement);
+  if (t.enemy) parts.push('enemy unit here');
   if (t.city === null && t.terrain !== 'unknown') parts.push('not your territory');
   return parts.join(' · ');
 }

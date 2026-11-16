@@ -6,12 +6,21 @@ export interface Tile {
   improvement: Improvement;
   /** Index into GameState.cities when the tile is in one of the player's cities, else null. */
   city: number | null;
+  /**
+   * A unit of another player stands here, on a tile you can see. While it is there you
+   * can't build, destroy or change the terrain on this tile. Absent = no such unit.
+   */
+  enemy?: boolean;
 }
 
 export interface City {
   name: string;
   x: number;
   y: number;
+  /** City level (1 = just founded). Absent on hand-drawn maps until set. */
+  level?: number;
+  /** Population toward the next level (the filled pips under the city in the game). */
+  population?: number;
 }
 
 export interface Settings {
