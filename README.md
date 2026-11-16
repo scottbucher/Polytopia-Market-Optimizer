@@ -23,11 +23,28 @@ It runs entirely in your browser. Nothing is uploaded.
 
 ## Where is my save file?
 
+Browsers can't open a folder by its path, so **Load game save** shows the folder for your computer with a **Copy path** button. Paste it into the file dialog.
+
 | Platform | Folder |
 | --- | --- |
 | Windows (Steam) | `%USERPROFILE%\AppData\LocalLow\Midjiwan\Polytopia\<account id>\Data\Singleplayer\` |
+| Mac (Steam) | `~/Library/Application Support/<Polytopia folder>/<account id>/Data/Singleplayer/` |
+| Linux (Steam) | `~/.config/unity3d/Midjiwan/Polytopia/<account id>/Data/Singleplayer/` |
+| Linux (Steam with Proton) | `~/.local/share/Steam/steamapps/compatdata/874390/pfx/drive_c/users/steamuser/AppData/LocalLow/Midjiwan/Polytopia/<account id>/Data/Singleplayer/` |
+| Phone or tablet | Can't be reached: the app keeps its saves where browsers (and you) can't get at them. |
 
-Each game is one `<id>.state` file. Copy it somewhere first if you want to keep it, since the game deletes it when the game ends.
+- **Windows:** paste `%USERPROFILE%\AppData\LocalLow\Midjiwan\Polytopia` into the address bar of the file dialog; the `%USERPROFILE%` part fills itself in.
+- **Mac:** the Library folder is hidden. In the file dialog press <kbd>⇧⌘G</kbd> (Go to folder) and paste `~/Library/Application Support`. The game's folder there is named after Midjiwan or Polytopia (Unity names it after the app's bundle id; we haven't been able to check the exact name). If you can't find it, `find ~/Library -name '*.state' -path '*Singleplayer*'` in Terminal lists the saves.
+- **Linux:** the folders are hidden. In the file dialog press <kbd>Ctrl</kbd>+<kbd>L</kbd> and paste the path. If your Steam library is somewhere else, `compatdata` is in that library's `steamapps` folder.
+
+Each game is one `<game id>.state` file. Copy it somewhere first if you want to keep it, since the game deletes it when the game ends.
+
+### Keeping in sync
+
+After you load a save, a bar above the map shows when it was read, with a **Refresh** button that reads it again. A refresh of the same game takes stars, techs, the map and cities from the save but keeps what the save doesn't know: your goal, what the plan may do, rules and costs, and your correction to "Income per turn". If a plan is showing, it is marked out of date; press **Solve again** when you want a new one.
+
+- **Chrome and Edge on Windows** can keep hold of the save: choose the **Singleplayer folder** (or the `Polytopia` folder above it) and the planner follows the game you're playing, including new games. **Keep up to date** reads the save by itself whenever the game writes it (it checks every few seconds while the tab is showing). After you reload the page, one click on **Reconnect** picks it up again.
+- **Firefox and Safari**, and Chrome on Mac or Linux: **Refresh** opens the file dialog again (it opens in the same folder). Auto-update isn't possible there: Firefox and Safari can't read a file again after it changes, and Chrome doesn't let pages read app data folders on Mac (`~/Library`) or Linux (`~/.config`, `~/.local/share`).
 
 ## Rules used
 
