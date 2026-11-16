@@ -18,6 +18,21 @@ describe('speed on a big map (30×30, 6 cities)', () => {
   }
 });
 
+describe('speed with city levels known (level-ups modelled)', () => {
+  it('best-by', () => {
+    const s = bigMap(6);
+    s.cities.forEach((c, i) => {
+      c.level = 1 + (i % 4);
+      c.population = i % 2;
+    });
+    const t = performance.now();
+    const r = runOptimizer(s, { kind: 'best-by', turns: 25 });
+    expect(r.result!.skipped).toEqual([]);
+    expect(r.result!.schedule.steps.some((x) => x.levelUps)).toBe(true);
+    expect(performance.now() - t).toBeLessThan(40000);
+  }, 60000);
+});
+
 describe('frontier quality on a big map', () => {
   it('the middle of the frontier stays cheap (peeling works)', () => {
     const f = search(bigMap(6), { objectives: objectivesFor({ kind: 'max' }) });

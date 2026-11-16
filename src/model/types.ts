@@ -37,6 +37,8 @@ export interface Settings {
   allowDestroy: boolean;
   /** Let the plan buy new techs. Off = only use techs you own. */
   allowNewTech: boolean;
+  /** Count the rewards of cities levelling up from the plan's population. Unset = on. */
+  cityUpgrades?: boolean;
   costs: CostTable;
 }
 

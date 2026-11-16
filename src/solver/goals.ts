@@ -1,3 +1,4 @@
+import { turnNow } from '../model/goalPrefs';
 import type { GameState, Goal } from '../model/types';
 import { currentLayout, type Frontier, type Plan } from './exact';
 import { income, neighborTable } from './income';
@@ -10,9 +11,9 @@ export interface GoalResult {
   /** Did the plan meet the goal within the turn limit? (always true for "max") */
   met: boolean;
   summary: string;
-  /** For income goals: turn the target income is first collected (0 = already). */
+  /** For income goals: turns from now until the target income is first collected (0 = already). */
   reachedTurn?: number;
-  /** For bank goals: stars on hand at the start of the deadline turn. */
+  /** For bank goals: stars on hand on the deadline turn, after its income and before spending. */
   bankAtDeadline?: number;
   /** Stars you would have at the deadline by building nothing. */
   bankIfNothing?: number;
@@ -57,10 +58,15 @@ export function planResult(state: GameState, plan: Plan, summary?: string): Goal
   };
 }
 
+/**
+ * Goal deadlines (`goal.turns`) are turns from now; summaries name game turns, so
+ * `goal.turns` = 12 on turn 18 reads "turn 30".
+ */
 export function evaluateGoal(state: GameState, frontier: Frontier, goal: Goal): GoalResult | null {
   const plans = frontier.plans;
   if (!plans.length) return null;
   const top = plans[plans.length - 1];
+  const now = turnNow(state);
 
   if (goal.kind === 'max') {
     const r = planResult(state, top);
@@ -107,10 +113,10 @@ export function evaluateGoal(state: GameState, frontier: Frontier, goal: Goal): 
     }
     const t = best.reachedTurn!;
     best.summary = best.met
-      ? `You can be collecting ${target}★ per turn from markets on turn ${t} (${t === 1 ? 'next turn' : `${t} turns from now`}). Markets pay at the start of the turn after they are built.`
+      ? `You can be collecting ${target}★ per turn from markets on turn ${now + t} (${t === 1 ? 'next turn' : `${t} turns from now`}). Markets pay at the start of the turn after they are built.`
       : t === Infinity
         ? `You can't afford to get there with your current income.`
-        : `Not possible ${goal.turns === 0 ? 'this turn' : `within ${goal.turns} turn${goal.turns === 1 ? '' : 's'}`}. The fastest plan gets there on turn ${t}.`;
+        : `Not possible by turn ${now + goal.turns}. The fastest plan gets there on turn ${now + t}.`;
     return best;
   }
 
@@ -154,18 +160,20 @@ export function evaluateGoal(state: GameState, frontier: Frontier, goal: Goal): 
   if (!best) return null;
   const bank = best.bankAtDeadline!;
   const built = best.bundles.length > 0;
-  const turnText = T === 0 ? 'this turn' : `turn ${T}`;
+  const turnText = T === 0 ? 'this turn' : `turn ${now + T}`;
+  // Exactly when the stars are counted.
+  const when = T === 0 ? '' : ` (after that turn's income, before you spend)`;
   if (goal.kind === 'bank') {
     best.met = bank >= goal.stars;
     best.summary = best.met
       ? built
-        ? `You can have ${bank}★ on ${turnText} (goal ${goal.stars}★). Building nothing would leave you ${bankIfNothing}★.`
-        : `Build nothing: you'll have ${bank}★ on ${turnText}, which already meets ${goal.stars}★. No market pays for itself in time.`
-      : `The most you can have on ${turnText} is ${bank}★, short of ${goal.stars}★.`;
+        ? `You can have ${bank}★ on ${turnText}${when}, goal ${goal.stars}★. Building nothing would leave you ${bankIfNothing}★.`
+        : `Build nothing: you'll have ${bank}★ on ${turnText}${when}, which already meets ${goal.stars}★. No market pays for itself in time.`
+      : `The most you can have on ${turnText}${when} is ${bank}★, short of ${goal.stars}★.`;
   } else {
     best.summary = built
-      ? `Best for ${turnText}: ${bank}★ on hand, versus ${bankIfNothing}★ if you build nothing.`
-      : `Nothing pays for itself by ${turnText}. Save your stars (${bank}★ on ${turnText}).`;
+      ? `Best for ${turnText}: ${bank}★ on hand${when}, versus ${bankIfNothing}★ if you build nothing.`
+      : `Nothing pays for itself by ${turnText}. Save your stars (${bank}★ on ${turnText}${when}).`;
   }
   return best;
 }

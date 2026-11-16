@@ -331,3 +331,54 @@ export const REVEAL_TECH: Partial<Record<Resource, TechKey[]>> = {
 
 /** Tech roots in tree order. */
 export const TECH_ROOTS: TechKey[] = TECHS.filter((t) => t.parent === null).map((t) => t.key);
+
+// ---- City growth ----
+//
+// Population from buildings comes from the game's logic data (`rewards`, and for
+// producers `growthRewards` per level). The level-up rewards are not in that data:
+// they are the game's fixed choices, checked against a real save, where a city's
+// income is its level, plus 1 for each Workshop and Park, plus 1 for the capital
+// (the save's city `production` field is 1 + Workshops + Parks).
+
+/** Population a building adds to the city it stands in. */
+export const BUILDING_POPULATION: Partial<Record<BuildingKind, number>> = { farm: 2, lumberhut: 1, mine: 2, aquafarm: 2 };
+
+/** Population a producer adds to its own city for each level it gains. */
+export const PRODUCER_POPULATION: Record<Producer, number> = { sawmill: 1, windmill: 1, forge: 2 };
+
+/** Population a city at `level` needs to reach the next level. Extra population carries over. */
+export const popToLevelUp = (level: number) => level + 1;
+
+/** Stars per turn each city level adds by itself, whatever reward you take. */
+export const LEVEL_INCOME = 1;
+
+export type CityReward = 'workshop' | 'resources' | 'popgrowth' | 'park';
+
+export interface CityRewardDef {
+  /** The level the city reaches. Level 5 and up all offer the last row. */
+  level: number;
+  reward: CityReward;
+  name: string;
+  /** The other (non-economic) choice at that level. */
+  other: string;
+  /** Stars right away. */
+  stars: number;
+  /** Stars per turn from the reward, on top of LEVEL_INCOME. */
+  income: number;
+  /** Population right away (it can level the city up again). */
+  population: number;
+}
+
+/** The economic reward at each level-up: the one this planner always takes. */
+export const CITY_REWARDS: CityRewardDef[] = [
+  { level: 2, reward: 'workshop', name: 'Workshop', other: 'Explorer', stars: 0, income: 1, population: 0 },
+  { level: 3, reward: 'resources', name: 'Resources', other: 'City wall', stars: 5, income: 0, population: 0 },
+  { level: 4, reward: 'popgrowth', name: 'Population growth', other: 'Border growth', stars: 0, income: 0, population: 3 },
+  { level: 5, reward: 'park', name: 'Park', other: 'Super unit', stars: 0, income: 1, population: 0 },
+];
+
+/** The economic reward for reaching `level` (null below level 2). */
+export function cityReward(level: number): CityRewardDef | null {
+  if (level < CITY_REWARDS[0].level) return null;
+  return CITY_REWARDS.find((r) => r.level === level) ?? CITY_REWARDS[CITY_REWARDS.length - 1];
+}

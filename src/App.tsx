@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BUILDING_KINDS, BUILDING_NAMES, type BuildingKind, type CostTable, DEFAULT_COSTS, TRIBE_BY_KEY, TRIBES, type Terrain, type TribeKey } from './data/rules';
 import { blankState, exampleState } from './model/defaults';
+import { type GoalKind, type GoalPrefs, loadGoalPrefs, MAX_TURN, resolveGoal, saveGoalPrefs, turnNow, turnsFromNow } from './model/goalPrefs';
 import { download, loadLocal, mapJson, parseJson, saveLocal } from './model/io';
 import { applyTool, type Tool } from './model/paint';
-import type { GameState, Goal } from './model/types';
+import type { GameState } from './model/types';
 import { parseStateFile, type RawSave } from './parse/stateFile';
 import { humanPlayers, toGameState } from './parse/toGameState';
 import { currentLayout } from './solver/exact';
@@ -30,9 +31,6 @@ const TERRAINS: [Terrain, string][] = [
 
 const BUILD_TOOLS: (BuildingKind | 'none' | 'other')[] = [...BUILDING_KINDS, 'other', 'none'];
 
-type GoalKind = Goal['kind'];
-type GoalsByKind = { [K in GoalKind]: Extract<Goal, { kind: K }> };
-
 const TERRAIN_KEYS: Record<string, Terrain> = { '1': 'field', '2': 'forest', '3': 'mountain', '4': 'water', '5': 'ocean', '6': 'unknown' };
 
 const FIRST_RUN =
@@ -46,16 +44,12 @@ export default function App() {
   const [state, setState] = useState<GameState>(initial.state);
   const [tool, setTool] = useState<Tool>({ kind: 'look' });
   const [view, setView] = useState<View>({ rot: 0, flip: false });
-  // One goal per kind, so switching goal type and back keeps the numbers you typed.
-  const [goalKind, setGoalKind] = useState<GoalKind>('max');
-  const [goals, setGoals] = useState<GoalsByKind>(() => ({
-    max: { kind: 'max' },
-    income: { kind: 'income', income: Math.max(1, income(currentLayout(initial.state), initial.state.width, initial.state.height).total + 4), turns: 10 },
-    bank: { kind: 'bank', stars: 30, turns: 8 },
-    'best-by': { kind: 'best-by', turns: 15 },
-  }));
-  const goal: Goal = goals[goalKind];
-  const editGoal = (g: Goal) => setGoals((m) => ({ ...m, [g.kind]: g }));
+  // The goal kind and the numbers typed for each kind, kept across goal switches, reloads
+  // and loading a newer save (deadlines are game turns).
+  const [goalPrefs, setGoalPrefs] = useState<GoalPrefs>(loadGoalPrefs);
+  useEffect(() => saveGoalPrefs(goalPrefs), [goalPrefs]);
+  const setGoalKind = (kind: GoalKind) => setGoalPrefs((p) => ({ ...p, kind }));
+  const editGoal = <K extends Exclude<GoalKind, 'max'>>(kind: K, patch: Partial<GoalPrefs[K]>) => setGoalPrefs((p) => ({ ...p, [kind]: { ...p[kind], ...patch } }));
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(initial.firstRun ? FIRST_RUN : null);
   // The map a replace (new, example, opened file) threw away, for one step of undo.
@@ -79,12 +73,14 @@ export default function App() {
 
   useEffect(() => saveLocal(state), [state]);
 
-  // What a solve depends on: the map, settings and the goal.
-  const stateKey = useMemo(() => JSON.stringify([state, goal]), [state, goal]);
-  const stale = opt.solved !== null && opt.solved.stateKey !== stateKey;
   const s = state.settings;
   const tribe = TRIBE_BY_KEY[s.tribe];
   const curIncome = useMemo(() => income(currentLayout(state), state.width, state.height).total, [state]);
+  const now = turnNow(state);
+  const { goal, by: deadline, problem: goalProblem } = useMemo(() => resolveGoal(goalPrefs, now, curIncome), [goalPrefs, now, curIncome]);
+  // What a solve depends on: the map, settings and the goal.
+  const stateKey = useMemo(() => JSON.stringify([state, goal]), [state, goal]);
+  const stale = opt.solved !== null && opt.solved.stateKey !== stateKey;
 
   const update = (fn: (s: GameState) => GameState) => setState((prev) => fn(structuredClone(prev)));
   const setSettings = (patch: Partial<GameState['settings']>) => update((st) => ({ ...st, settings: { ...st.settings, ...patch } }));
@@ -106,7 +102,6 @@ export default function App() {
     if (backdrop) URL.revokeObjectURL(backdrop.href);
     setBackdrop(null);
     setTileOpacity(1);
-    if (goalKind === 'income') editGoal({ ...goals.income, income: Math.max(1, income(currentLayout(next), next.width, next.height).total + 4) });
   };
 
   const paint = (i: number, first: boolean) => {
@@ -434,22 +429,68 @@ export default function App() {
           </details>
           {state.cities.length > 0 && (
             <details className="panel">
-              <summary>City names</summary>
+              <summary>Cities</summary>
+              <p className="muted small">Level and population (the filled pips under the city's name) let the plan count the rewards when its buildings level a city up.</p>
               <div className="cities">
                 {state.cities.map((c, i) => (
-                  <label key={i}>
-                    <span className="dot" style={{ background: cityColor(i) }} />
-                    <input
-                      value={c.name}
-                      aria-label={`Name of city ${i + 1}`}
-                      onChange={(e) =>
-                        update((st) => {
-                          st.cities[i].name = e.target.value;
-                          return st;
-                        })
-                      }
-                    />
-                  </label>
+                  <div key={i} className="city-row">
+                    <label>
+                      <span className="dot" style={{ background: cityColor(i) }} />
+                      <input
+                        value={c.name}
+                        aria-label={`Name of city ${i + 1}`}
+                        onChange={(e) =>
+                          update((st) => {
+                            st.cities[i].name = e.target.value;
+                            return st;
+                          })
+                        }
+                      />
+                    </label>
+                    <span className="city-growth">
+                      <select
+                        aria-label={`Level of ${c.name || `city ${i + 1}`}`}
+                        value={c.level ?? ''}
+                        onChange={(e) =>
+                          update((st) => {
+                            const city = st.cities[i];
+                            if (e.target.value === '') {
+                              delete city.level;
+                              delete city.population;
+                            } else {
+                              city.level = Number(e.target.value);
+                              city.population = Math.min(city.level, city.population ?? 0);
+                            }
+                            return st;
+                          })
+                        }
+                      >
+                        <option value="">Level ?</option>
+                        {Array.from({ length: Math.max(12, c.level ?? 0) }, (_, k) => k + 1).map((l) => (
+                          <option key={l} value={l}>
+                            Level {l}
+                          </option>
+                        ))}
+                      </select>
+                      {c.level !== undefined && (
+                        <label className="pop">
+                          <NumberField
+                            aria-label={`Population of ${c.name || `city ${i + 1}`}`}
+                            min={0}
+                            max={c.level}
+                            value={c.population ?? 0}
+                            onChange={(v) =>
+                              update((st) => {
+                                st.cities[i].population = v;
+                                return st;
+                              })
+                            }
+                          />
+                          /{c.level + 1}
+                        </label>
+                      )}
+                    </span>
+                  </div>
                 ))}
               </div>
             </details>
@@ -473,6 +514,10 @@ export default function App() {
               <label>
                 Cities you own
                 <NumberField min={1} max={999} value={s.cityCount} onChange={(v) => setSettings({ cityCount: v })} />
+              </label>
+              <label title="The turn number at the top of the game screen. Goal deadlines are game turns.">
+                Turn now
+                <NumberField min={0} max={MAX_TURN} value={now} onChange={(v) => update((st) => ({ ...st, turn: v }))} />
               </label>
               <label>
                 Stars now
@@ -501,8 +546,8 @@ export default function App() {
               >
                 {goal.kind === 'income' && (
                   <span className="inline">
-                    <NumberField aria-label="Market income to reach" min={1} max={999} value={goal.income} onChange={(v) => editGoal({ ...goal, income: v })} />★ per turn from markets within
-                    <NumberField aria-label="Within how many turns" min={0} max={200} value={goal.turns} onChange={(v) => editGoal({ ...goal, turns: v })} /> turns
+                    <NumberField aria-label="Market income to reach" min={1} max={999} value={goal.income} onChange={(v) => editGoal('income', { income: v })} />★ per turn from markets by
+                    <Deadline by={deadline!} now={now} problem={goalProblem} onChange={(v) => editGoal('income', { by: v })} />
                   </span>
                 )}
               </GoalOpt>
@@ -510,12 +555,12 @@ export default function App() {
                 checked={goal.kind === 'bank'}
                 onSelect={() => setGoalKind('bank')}
                 title="Save up stars"
-                desc="Have a number of stars on hand by a deadline, investing only where it pays off in time."
+                desc="Have a number of stars on hand on a turn, after that turn's income and before you spend. Invests only where it pays off in time."
               >
                 {goal.kind === 'bank' && (
                   <span className="inline">
-                    <NumberField aria-label="Stars to have" min={0} max={9999} value={goal.stars} onChange={(v) => editGoal({ ...goal, stars: v })} />★ within
-                    <NumberField aria-label="Turns from now" min={0} max={200} value={goal.turns} onChange={(v) => editGoal({ ...goal, turns: v })} /> turns
+                    <NumberField aria-label="Stars to have" min={0} max={9999} value={goal.stars} onChange={(v) => editGoal('bank', { stars: v })} />★ by
+                    <Deadline by={deadline!} now={now} problem={goalProblem} onChange={(v) => editGoal('bank', { by: v })} />
                   </span>
                 )}
               </GoalOpt>
@@ -527,7 +572,7 @@ export default function App() {
               >
                 {goal.kind === 'best-by' && (
                   <span className="inline">
-                    within <NumberField aria-label="Turns from now" min={0} max={200} value={goal.turns} onChange={(v) => editGoal({ ...goal, turns: v })} /> turns
+                    by <Deadline by={deadline!} now={now} problem={goalProblem} onChange={(v) => editGoal('best-by', { by: v })} />
                   </span>
                 )}
               </GoalOpt>
@@ -539,8 +584,14 @@ export default function App() {
               <Toggle label={tribe.canBurnForest ? 'burn forest' : `burn forest (not for ${tribe.name})`} checked={s.allowBurn} onChange={(v) => setSettings({ allowBurn: v })} disabled={!tribe.canBurnForest} />
               <Toggle label="grow forest" checked={s.allowGrow} onChange={(v) => setSettings({ allowGrow: v })} />
               <Toggle label="destroy buildings" checked={s.allowDestroy} onChange={(v) => setSettings({ allowDestroy: v })} />
+              <Toggle
+                label="count city upgrade rewards"
+                title="When the plan's farms, huts, mines and producers level up a city, take the economic reward (Workshop, Resources, Population growth, Park). Needs city levels: they come from your save, or set them under Cities."
+                checked={s.cityUpgrades !== false}
+                onChange={(v) => setSettings({ cityUpgrades: v })}
+              />
             </fieldset>
-            <button type="button" className="primary" onClick={() => !busy && opt.solve(state, goal, stateKey)} aria-disabled={busy || undefined} disabled={!canSolve}>
+            <button type="button" className="primary" onClick={() => !busy && opt.solve(state, goal, stateKey)} aria-disabled={busy || undefined} disabled={!canSolve || goalProblem !== null}>
               {busy ? 'Working…' : opt.solved ? 'Solve again' : 'Find the best layout'}
             </button>
             {state.cities.length === 0 ? (
@@ -626,12 +677,28 @@ function GoalOpt({ checked, onSelect, title, desc, children }: { checked: boolea
   );
 }
 
-function Toggle({ label, checked, onChange, disabled }: { label: string; checked: boolean; onChange: (v: boolean) => void; disabled?: boolean }) {
+function Toggle({ label, checked, onChange, disabled, title }: { label: string; checked: boolean; onChange: (v: boolean) => void; disabled?: boolean; title?: string }) {
   return (
-    <label className={`toggle${disabled ? ' disabled' : ''}`}>
+    <label className={`toggle${disabled ? ' disabled' : ''}`} title={title}>
       <input type="checkbox" checked={checked && !disabled} disabled={disabled} onChange={(e) => onChange(e.target.checked)} />
       {label}
     </label>
+  );
+}
+
+/** "by turn [30]" with how far away that is, or why it can't be used. */
+function Deadline({ by, now, problem, onChange }: { by: number; now: number; problem: string | null; onChange: (v: number) => void }) {
+  return (
+    <>
+      turn <NumberField aria-label="Deadline turn" min={0} max={MAX_TURN} value={by} onChange={onChange} />
+      {problem ? (
+        <small className="deadline warn" role="alert">
+          {problem}
+        </small>
+      ) : (
+        <small className="deadline">({turnsFromNow(by, now)})</small>
+      )}
+    </>
   );
 }
 

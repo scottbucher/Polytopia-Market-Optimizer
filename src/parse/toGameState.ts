@@ -84,7 +84,7 @@ export function humanPlayers(save: RawSave): HumanPlayer[] {
 export interface LoadReport {
   state: GameState;
   hiddenTiles: number;
-  /** Sum of each city's stored production: a starting estimate of non-market income. */
+  /** Stars per turn from your cities (everything but markets): a starting estimate of non-market income. */
   incomeEstimate: number;
 }
 
@@ -101,8 +101,16 @@ export function toGameState(save: RawSave, playerId: number, fileName = 'save'):
     for (const t of row) {
       if (t.improvement === IMP_CITY && t.owner === playerId && t.visibility.includes(playerId)) {
         cityAt.set(`${t.x},${t.y}`, cities.length);
-        cities.push({ name: t.city?.name || `City ${cities.length + 1}`, x: t.x, y: t.y });
-        incomeEstimate += Math.max(0, t.city?.production ?? 0);
+        const city: City = { name: t.city?.name || `City ${cities.length + 1}`, x: t.x, y: t.y };
+        if (t.city && t.city.level >= 1) {
+          city.level = t.city.level;
+          // `population` is the progress toward the next level (the filled pips in the game).
+          city.population = Math.max(0, Math.min(t.city.level, t.city.population));
+        }
+        cities.push(city);
+        // A city makes its level in stars, plus 1 per Workshop and Park; the save's
+        // `production` is 1 + Workshops + Parks. The capital makes 1 more.
+        incomeEstimate += Math.max(0, (t.city ? t.city.level + t.city.production - 1 : 0) + (t.capitalOf === playerId ? 1 : 0));
       }
     }
   }
@@ -152,6 +160,7 @@ export function toGameState(save: RawSave, playerId: number, fileName = 'save'):
     tiles,
     cities,
     source: `${fileName} · turn ${save.header.currentTurn}`,
+    turn: save.header.currentTurn,
     settings: {
       ...defaultSettings(),
       tribe,

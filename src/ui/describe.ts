@@ -1,5 +1,6 @@
-import { BUILDING_NAMES, isBuildingKind, OP_NAMES, techName } from '../data/rules';
+import { BUILDING_NAMES, cityReward, isBuildingKind, OP_NAMES, techName } from '../data/rules';
 import type { GameState } from '../model/types';
+import type { LevelUp } from '../solver/cities';
 import type { Action } from '../solver/schedule';
 
 export function where(state: GameState, tile: number) {
@@ -33,4 +34,12 @@ export function enemyNote(n: number) {
   if (n <= 0) return '';
   const tiles = n === 1 ? '1 of your tiles has an enemy unit on it, so the plan leaves it alone.' : `${n} of your tiles have enemy units on them, so the plan leaves them alone.`;
   return `${tiles} Refresh your save once they move.`;
+}
+
+/** "Guarklak reaches level 3: take Resources, +5★ now and +1★ per turn". */
+export function describeLevelUp(state: GameState, u: LevelUp): string {
+  const name = state.cities[u.city]?.name.trim() || `City ${u.city + 1}`;
+  const r = cityReward(u.level)!;
+  const gains = [u.stars ? `+${u.stars}★ now` : '', r.population ? `+${r.population} population` : '', u.income ? `+${u.income}★ per turn` : ''].filter(Boolean);
+  return `${name} reaches level ${u.level}: take ${r.name}, ${gains.join(' and ')}`;
 }
