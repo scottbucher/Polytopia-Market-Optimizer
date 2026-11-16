@@ -415,8 +415,15 @@ main {
   height: 22px;
   background: var(--line);
 }
-.toolbar .grow {
-  flex: 1;
+.toolbar .tools {
+  display: contents;
+}
+/* Game view, rotate, mirror and expand: kept together at the end of the row. */
+.toolbar .viewctl {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-left: auto;
 }
 .tool {
   padding: 4px 9px;
@@ -545,7 +552,8 @@ main:has(> .mapcol.wide) {
   overflow: visible;
 }
 @media (max-width: 980px) {
-  .widebtn {
+  /* One column already: nothing to expand. */
+  button.widebtn {
     display: none;
   }
   .mapscroll {
@@ -645,6 +653,14 @@ main:has(> .mapcol.wide) {
 .bld text.big {
   font-size: 13px;
 }
+.bld text.big.inc {
+  font-size: 12px;
+}
+/* Buildings and enemies outside your territory: someone else's, so they step back. */
+.bld.out,
+.other.out {
+  opacity: 0.5;
+}
 .b-market text,
 .b-windmill text {
   fill: var(--b-ink-dark);
@@ -726,14 +742,15 @@ main:has(> .mapcol.wide) {
   fill: rgba(0, 0, 0, 0.45);
   stroke: none;
 }
-.stepnum circle {
+.stepnum circle,
+.stepnum rect {
   fill: var(--accent);
   stroke: var(--accent-ink);
   stroke-width: 1.5;
 }
 .stepnum text {
   fill: var(--accent-ink);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 800;
   text-anchor: middle;
 }
@@ -889,6 +906,9 @@ details.panel[open] > summary {
 .goal .inline input {
   width: 7ch;
   min-width: 64px;
+}
+.goal .by {
+  white-space: nowrap;
 }
 .goal .deadline {
   display: inline;
@@ -1233,13 +1253,21 @@ footer {
     grid-template-columns: 1fr;
     gap: 2px;
   }
-  /* The toolbar scrolls sideways instead of filling the first screen. */
-  .toolbar {
-    flex-wrap: nowrap;
+  /* The paint tools scroll sideways instead of filling the first screen; the view
+     controls get a row of their own so they're never a long swipe away. */
+  .toolbar .tools {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    flex: 1 0 100%;
+    min-width: 0;
     overflow-x: auto;
     scroll-snap-type: x proximity;
+    /* Room for the focus ring inside the scrolling box. */
+    padding: 3px;
+    margin: -3px;
   }
-  .toolbar > * {
+  .toolbar .tools > * {
     flex: none;
   }
 }
@@ -1287,8 +1315,55 @@ footer {
   .goal input[type='radio'] {
     margin-top: 0;
   }
+  /* The whole 44px square takes the tap: the real checkbox fills it, invisible, over a drawn box. */
   .step .check {
+    position: relative;
     min-width: 44px;
+    min-height: 44px;
+  }
+  .step .check input {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    opacity: 0;
+    cursor: pointer;
+  }
+  .step .check::before {
+    content: '';
+    width: 20px;
+    height: 20px;
+    box-sizing: border-box;
+    border: 2px solid var(--line-strong);
+    border-radius: 4px;
+    background: var(--panel);
+  }
+  .step.done .check::before {
+    background: var(--accent);
+    border-color: var(--accent);
+  }
+  .step.done .check::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 5px;
+    height: 10px;
+    border: solid var(--accent-ink);
+    border-width: 0 2.5px 2.5px 0;
+    transform: translate(-50%, -62%) rotate(45deg);
+  }
+  .step .check:has(input:focus-visible)::before {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  .mapfoot label {
+    min-height: 44px;
+  }
+  .loadsave .others summary {
+    display: flex;
+    align-items: center;
     min-height: 44px;
   }
   .steprow {
@@ -1314,12 +1389,6 @@ footer {
 }
 .maplabels .stepnum text {
   stroke: none;
-}
-.maplabels .inc {
-  font-size: 12px;
-  font-weight: 700;
-  text-anchor: middle;
-  fill: var(--ink);
 }
 .stale-note {
   margin: 0 0 8px;

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BUILDING_KINDS, BUILDING_NAMES, type BuildingKind, type CostTable, DEFAULT_COSTS, TRIBE_BY_KEY, TRIBES, type Terrain, type TribeKey } from './data/rules';
 import { blankState, exampleState } from './model/defaults';
-import { type GoalKind, type GoalPrefs, loadGoalPrefs, MAX_TURN, resolveGoal, saveGoalPrefs, turnNow, turnsFromNow } from './model/goalPrefs';
+import { type GoalKind, type GoalPrefs, loadGoalPrefs, MAX_TURN, resolveGoal, saveGoalPrefs, turnNow } from './model/goalPrefs';
 import { download, loadLocal, mapJson, parseJson, saveLocal } from './model/io';
 import { applyTool, type Tool } from './model/paint';
 import type { GameState } from './model/types';
@@ -14,6 +14,7 @@ import { techPrice } from './solver/options';
 import { layoutAfter } from './solver/schedule';
 import { plural, where } from './ui/describe';
 import { type Backdrop, cityColor, GAME_VIEW, isGameView, loadView, MapView, type Overlay, readPref, saveView, type View, writePref } from './ui/MapView';
+import { GoalPicker, SolveHint } from './ui/GoalPicker';
 import { NumberField } from './ui/NumberField';
 import { ResultsPanel } from './ui/ResultsPanel';
 import { ScreenshotPanel } from './ui/ScreenshotPanel';
@@ -66,6 +67,8 @@ export default function App() {
   // Last painted tile: flashed on the map and announced to screen readers.
   const [lastPaint, setLastPaint] = useState<{ tile: number; n: number } | null>(null);
   const [hover, setHover] = useState<number | null>(null);
+  // The tile under the keyboard cursor, said by screen readers as it moves.
+  const [cursorSay, setCursorSay] = useState('');
   const [stepHover, setStepHover] = useState<number | null>(null);
   // A step tapped in the build order stays highlighted on the map until the next tap.
   const [pinTile, setPinTile] = useState<number | null>(null);
@@ -252,6 +255,8 @@ export default function App() {
   // Tiles a market could use: explored land inside your territory.
   const mappedTiles = useMemo(() => state.tiles.filter((t) => t.city !== null && t.terrain !== 'unknown').length, [state.tiles]);
   const canSolve = !unsupported && state.cities.length > 0 && mappedTiles > 0;
+  // Both Solve buttons (the plan panel's and the save bar's) run only when this is true.
+  const canRun = canSolve && !busy && goalProblem === null;
   const painted = lastPaint ? describeTile(state, lastPaint.tile) : null;
   const [coarse] = useState(() => typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches);
 
@@ -305,7 +310,7 @@ export default function App() {
         </div>
       </header>
 
-      <SyncBar sync={sync} planStale={stale} onSolve={canSolve && !busy ? () => opt.solve(state, goal, stateKey) : null} />
+      <SyncBar sync={sync} planStale={stale} onSolve={canRun ? () => opt.solve(state, goal, stateKey) : null} />
       {pendingSave && (
         <div className="banner" role="status">
           {pendingSave.note ? `${pendingSave.note} ` : ''}This save has more than one human player. Who are you?
@@ -357,94 +362,97 @@ export default function App() {
 
       <main>
         <section className={`mapcol${wideMap ? ' wide' : ''}`}>
-          <div className="toolbar" role="group" aria-label="Map tools">
-            <ToolBtn active={tool.kind === 'look'} onClick={() => pickTool({ kind: 'look' })} title="Look around without changing the map: drag to move, Ctrl + wheel to zoom (M)">
-              Move
-            </ToolBtn>
-            <span className="sep" />
-            {TERRAINS.map(([v, label]) => (
-              <ToolBtn key={v} active={tool.kind === 'terrain' && tool.v === v} onClick={() => pickTool({ kind: 'terrain', v })} swatch={`t-${v}`} title={`Paint ${label.toLowerCase()} (${TERRAINS.findIndex((x) => x[0] === v) + 1})`}>
-                {label}
+          <div className="toolbar">
+            <div className="tools" role="group" aria-label="Map tools">
+              <ToolBtn active={tool.kind === 'look'} onClick={() => pickTool({ kind: 'look' })} title="Look around without changing the map: drag to move, Ctrl + wheel to zoom (M)">
+                Move
               </ToolBtn>
-            ))}
-            <span className="sep" />
-            <ToolBtn active={tool.kind === 'resource' && tool.v === 'crop'} onClick={() => pickTool({ kind: 'resource', v: 'crop' })}>
-              Crop
-            </ToolBtn>
-            <ToolBtn active={tool.kind === 'resource' && tool.v === 'metal'} onClick={() => pickTool({ kind: 'resource', v: 'metal' })}>
-              Metal
-            </ToolBtn>
-            {tribe.hasAquafarm && (
-              <ToolBtn active={tool.kind === 'resource' && tool.v === 'aquacrop'} onClick={() => pickTool({ kind: 'resource', v: 'aquacrop' })}>
-                Water crop
+              <span className="sep" />
+              {TERRAINS.map(([v, label]) => (
+                <ToolBtn key={v} active={tool.kind === 'terrain' && tool.v === v} onClick={() => pickTool({ kind: 'terrain', v })} swatch={`t-${v}`} title={`Paint ${label.toLowerCase()} (${TERRAINS.findIndex((x) => x[0] === v) + 1})`}>
+                  {label}
+                </ToolBtn>
+              ))}
+              <span className="sep" />
+              <ToolBtn active={tool.kind === 'resource' && tool.v === 'crop'} onClick={() => pickTool({ kind: 'resource', v: 'crop' })}>
+                Crop
               </ToolBtn>
-            )}
-            <span className="sep" />
-            <select
-              aria-label="Building"
-              value={tool.kind === 'building' ? tool.v : ''}
-              onChange={(e) => pickTool({ kind: 'building', v: e.target.value as BuildingKind | 'none' | 'other' })}
-            >
-              <option value="" disabled>
-                Building…
-              </option>
-              {BUILD_TOOLS.filter((b) => b !== 'aquafarm' || tribe.hasAquafarm).map((b) => (
-                <option key={b} value={b}>
-                  {b === 'none' ? 'Remove building' : b === 'other' ? 'Other (temple, port…)' : BUILDING_NAMES[b]}
+              <ToolBtn active={tool.kind === 'resource' && tool.v === 'metal'} onClick={() => pickTool({ kind: 'resource', v: 'metal' })}>
+                Metal
+              </ToolBtn>
+              {tribe.hasAquafarm && (
+                <ToolBtn active={tool.kind === 'resource' && tool.v === 'aquacrop'} onClick={() => pickTool({ kind: 'resource', v: 'aquacrop' })}>
+                  Water crop
+                </ToolBtn>
+              )}
+              <span className="sep" />
+              <select
+                aria-label="Building"
+                value={tool.kind === 'building' ? tool.v : ''}
+                onChange={(e) => pickTool({ kind: 'building', v: e.target.value as BuildingKind | 'none' | 'other' })}
+              >
+                <option value="" disabled>
+                  Building…
                 </option>
-              ))}
-            </select>
-            <ToolBtn active={tool.kind === 'city'} onClick={() => pickTool({ kind: 'city' })} title="Tap a tile to add or remove a city">
-              City
-            </ToolBtn>
-            <ToolBtn active={tool.kind === 'enemy'} onClick={() => pickTool({ kind: 'enemy' })} title="Tap a tile to add or remove an enemy unit. The plan leaves those tiles alone.">
-              Enemy unit
-            </ToolBtn>
-            <select
-              aria-label="Territory"
-              value={tool.kind === 'territory' ? String(tool.city) : ''}
-              onChange={(e) => pickTool({ kind: 'territory', city: e.target.value === 'null' ? null : Number(e.target.value) })}
-            >
-              <option value="" disabled>
-                Territory…
-              </option>
-              {state.cities.map((c, i) => (
-                <option key={i} value={i}>
-                  Belongs to {c.name.trim() || `City ${i + 1}`}
+                {BUILD_TOOLS.filter((b) => b !== 'aquafarm' || tribe.hasAquafarm).map((b) => (
+                  <option key={b} value={b}>
+                    {b === 'none' ? 'Remove building' : b === 'other' ? 'Other (temple, port…)' : BUILDING_NAMES[b]}
+                  </option>
+                ))}
+              </select>
+              <ToolBtn active={tool.kind === 'city'} onClick={() => pickTool({ kind: 'city' })} title="Tap a tile to add or remove a city">
+                City
+              </ToolBtn>
+              <ToolBtn active={tool.kind === 'enemy'} onClick={() => pickTool({ kind: 'enemy' })} title="Tap a tile to add or remove an enemy unit. The plan leaves those tiles alone.">
+                Enemy unit
+              </ToolBtn>
+              <select
+                aria-label="Territory"
+                value={tool.kind === 'territory' ? String(tool.city) : ''}
+                onChange={(e) => pickTool({ kind: 'territory', city: e.target.value === 'null' ? null : Number(e.target.value) })}
+              >
+                <option value="" disabled>
+                  Territory…
                 </option>
-              ))}
-              <option value="null">Not yours</option>
-            </select>
-            <span className="grow" />
-            <ToolBtn active={isGameView(view)} onClick={() => setView({ ...GAME_VIEW })} title="Turn the map the way the game shows it">
-              Game view
-            </ToolBtn>
-            <button type="button" className="icon" title="Rotate map" aria-label="Rotate map" onClick={() => setView({ ...view, rot: ((view.rot + 1) % 4) as View['rot'] })}>
-              <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
-                <path d="M13 8a5 5 0 1 1-1.6-3.7M13 2.5v3h-3" />
-              </svg>
-            </button>
-            <button type="button" className="icon" title="Mirror map" aria-label="Mirror map" onClick={() => setView({ ...view, flip: !view.flip })}>
-              <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
-                <path d="M8 1.5v13" />
-                <path className="solid" d="M6 4 2 8l4 4V4zM10 4l4 4-4 4V4z" />
-              </svg>
-            </button>
-            <button
-              type="button"
-              className="icon widebtn"
-              title={wideMap ? 'Narrow map' : 'Expand map'}
-              aria-label="Expand map"
-              aria-pressed={wideMap}
-              onClick={() => {
-                setWideMap(!wideMap);
-                writePref(WIDE_KEY, !wideMap);
-              }}
-            >
-              <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
-                {wideMap ? <path d="M1.5 8h4.5M14.5 8H10M4 5.5 6.5 8 4 10.5M12 5.5 9.5 8l2.5 2.5" /> : <path d="M1.5 8h13M4.5 5 1.5 8l3 3M11.5 5l3 3-3 3" />}
-              </svg>
-            </button>
+                {state.cities.map((c, i) => (
+                  <option key={i} value={i}>
+                    Belongs to {c.name.trim() || `City ${i + 1}`}
+                  </option>
+                ))}
+                <option value="null">Not yours</option>
+              </select>
+            </div>
+            <div className="viewctl" role="group" aria-label="Map view">
+              <ToolBtn active={isGameView(view)} onClick={() => setView({ ...GAME_VIEW })} title="Turn the map the way the game shows it">
+                Game view
+              </ToolBtn>
+              <button type="button" className="icon" title="Rotate map" aria-label="Rotate map" onClick={() => setView({ ...view, rot: ((view.rot + 1) % 4) as View['rot'] })}>
+                <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+                  <path d="M13 8a5 5 0 1 1-1.6-3.7M13 2.5v3h-3" />
+                </svg>
+              </button>
+              <button type="button" className="icon" title="Mirror map" aria-label="Mirror map" onClick={() => setView({ ...view, flip: !view.flip })}>
+                <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+                  <path d="M8 1.5v13" />
+                  <path className="solid" d="M6 4 2 8l4 4V4zM10 4l4 4-4 4V4z" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                className="icon widebtn"
+                title={wideMap ? 'Narrow map' : 'Expand map'}
+                aria-label="Expand map"
+                aria-pressed={wideMap}
+                onClick={() => {
+                  setWideMap(!wideMap);
+                  writePref(WIDE_KEY, !wideMap);
+                }}
+              >
+                <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+                  {wideMap ? <path d="M1.5 8h4.5M14.5 8H10M4 5.5 6.5 8 4 10.5M12 5.5 9.5 8l2.5 2.5" /> : <path d="M1.5 8h13M4.5 5 1.5 8l3 3M11.5 5l3 3-3 3" />}
+                </svg>
+              </button>
+            </div>
           </div>
           {coarse && tool.kind !== 'look' && <p className="paint-hint small">Painting: dragging paints tiles. Choose Move to scroll the map. Pinch to zoom.</p>}
           <div className="mapwrap">
@@ -461,12 +469,16 @@ export default function App() {
               editing={tool.kind !== 'look'}
               flash={lastPaint}
               onToolKey={onToolKey}
+              onKeyCursor={(i) => setCursorSay(describeTile(state, i) ?? '')}
             />
           </div>
           <div className="mapfoot">
             <span className="muted small">{hoverInfo ?? [state.source, `${state.width}×${state.height}`].filter(Boolean).join(' · ')}</span>
             <span className="sr-only" aria-live="polite">
               {painted ? `Painted ${painted}` : ''}
+            </span>
+            <span className="sr-only" aria-live="polite">
+              {cursorSay}
             </span>
             {shown && !stale && (
               <label className="small">
@@ -601,47 +613,7 @@ export default function App() {
 
           <section className="panel open">
             <h2 id="goal-label">What do you want?</h2>
-            <div className="goals" role="radiogroup" aria-labelledby="goal-label">
-              <GoalOpt checked={goal.kind === 'max'} onSelect={() => setGoalKind('max')} title="Most market income" desc="Highest stars per turn, at the lowest cost for that income." />
-              <GoalOpt
-                checked={goal.kind === 'income'}
-                onSelect={() => setGoalKind('income')}
-                title="Reach an income"
-                desc="Get to a market income as soon as possible."
-              >
-                {goal.kind === 'income' && (
-                  <span className="inline">
-                    <NumberField aria-label="Market income to reach" min={1} max={999} value={goal.income} onChange={(v) => editGoal('income', { income: v })} />★ per turn from markets by
-                    <Deadline by={deadline!} now={now} problem={goalProblem} onChange={(v) => editGoal('income', { by: v })} />
-                  </span>
-                )}
-              </GoalOpt>
-              <GoalOpt
-                checked={goal.kind === 'bank'}
-                onSelect={() => setGoalKind('bank')}
-                title="Save up stars"
-                desc="Have a number of stars on hand on a turn, after that turn's income and before you spend. Invests only where it pays off in time."
-              >
-                {goal.kind === 'bank' && (
-                  <span className="inline">
-                    <NumberField aria-label="Stars to have" min={0} max={9999} value={goal.stars} onChange={(v) => editGoal('bank', { stars: v })} />★ by
-                    <Deadline by={deadline!} now={now} problem={goalProblem} onChange={(v) => editGoal('bank', { by: v })} />
-                  </span>
-                )}
-              </GoalOpt>
-              <GoalOpt
-                checked={goal.kind === 'best-by'}
-                onSelect={() => setGoalKind('best-by')}
-                title="Best return by a turn"
-                desc="Most stars on hand by a turn: only builds that pay for themselves before then."
-              >
-                {goal.kind === 'best-by' && (
-                  <span className="inline">
-                    by <Deadline by={deadline!} now={now} problem={goalProblem} onChange={(v) => editGoal('best-by', { by: v })} />
-                  </span>
-                )}
-              </GoalOpt>
-            </div>
+            <GoalPicker goal={goal} deadline={deadline} now={now} problem={goalProblem} onKind={setGoalKind} onEdit={editGoal} />
             <fieldset className="toggles">
               <legend>The plan may</legend>
               <Toggle label="buy new techs" checked={s.allowNewTech} onChange={(v) => setSettings({ allowNewTech: v })} />
@@ -656,14 +628,10 @@ export default function App() {
                 onChange={(v) => setSettings({ cityUpgrades: v })}
               />
             </fieldset>
-            <button type="button" className="primary" onClick={() => !busy && opt.solve(state, goal, stateKey)} aria-disabled={busy || undefined} disabled={!canSolve || goalProblem !== null}>
+            <button type="button" className="primary" onClick={() => canRun && opt.solve(state, goal, stateKey)} aria-disabled={busy || undefined} disabled={!canSolve || goalProblem !== null}>
               {busy ? 'Working…' : opt.solved ? 'Solve again' : 'Find the best layout'}
             </button>
-            {state.cities.length === 0 ? (
-              <p className="small muted">Add at least one city to the map first: pick the City tool and tap a tile.</p>
-            ) : (
-              mappedTiles === 0 && <p className="small muted">Paint the terrain around your cities first: none of your territory is explored yet.</p>
-            )}
+            <SolveHint cities={state.cities.length} mappedTiles={mappedTiles} />
             <p className="sr-only" role="status" aria-live="polite">
               {busy ? 'Finding the best layout…' : shown && !stale ? shown.summary : ''}
             </p>
@@ -727,43 +695,12 @@ function ToolBtn({ active, onClick, children, swatch, title }: { active: boolean
   );
 }
 
-function GoalOpt({ checked, onSelect, title, desc, children }: { checked: boolean; onSelect: () => void; title: string; desc: string; children?: React.ReactNode }) {
-  return (
-    <div className={`goal${checked ? ' on' : ''}`}>
-      <label>
-        <input type="radio" name="goal" checked={checked} onChange={onSelect} />
-        <span>
-          <strong>{title}</strong>
-          <small>{desc}</small>
-        </span>
-      </label>
-      {children}
-    </div>
-  );
-}
-
 function Toggle({ label, checked, onChange, disabled, title }: { label: string; checked: boolean; onChange: (v: boolean) => void; disabled?: boolean; title?: string }) {
   return (
     <label className={`toggle${disabled ? ' disabled' : ''}`} title={title}>
       <input type="checkbox" checked={checked && !disabled} disabled={disabled} onChange={(e) => onChange(e.target.checked)} />
       {label}
     </label>
-  );
-}
-
-/** "by turn [30]" with how far away that is, or why it can't be used. */
-function Deadline({ by, now, problem, onChange }: { by: number; now: number; problem: string | null; onChange: (v: number) => void }) {
-  return (
-    <>
-      turn <NumberField aria-label="Deadline turn" min={0} max={MAX_TURN} value={by} onChange={onChange} />
-      {problem ? (
-        <small className="deadline warn" role="alert">
-          {problem}
-        </small>
-      ) : (
-        <small className="deadline">({turnsFromNow(by, now)})</small>
-      )}
-    </>
   );
 }
 

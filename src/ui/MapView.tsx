@@ -86,6 +86,8 @@ interface Props {
   flash?: { tile: number; n: number } | null;
   /** Tool shortcut keys while the map has focus; returns true when the key was used. */
   onToolKey?: (key: string) => boolean;
+  /** The keyboard cursor moved to a tile (not called for the mouse or touch), for screen readers. */
+  onKeyCursor?: (tile: number) => void;
 }
 
 /** Grid (x,y) -> rotated grid (u,v). */
@@ -175,7 +177,7 @@ interface Anchor {
   ay: number;
 }
 
-export function MapView({ state, view, overlay, highlight, onPaint, onHover, backdrop, tileOpacity = 1, svgRef, editing = false, flash, onToolKey }: Props) {
+export function MapView({ state, view, overlay, highlight, onPaint, onHover, backdrop, tileOpacity = 1, svgRef, editing = false, flash, onToolKey, onKeyCursor }: Props) {
   const { width: w, height: h } = state;
   const bounds = useMemo(() => mapBounds(view, w, h), [view, w, h]);
   const centers = useMemo(() => Array.from({ length: w * h }, (_, i) => tileCenter(view, w, h, i)), [view, w, h]);
@@ -436,6 +438,7 @@ export function MapView({ state, view, overlay, highlight, onPaint, onHover, bac
         }
       setCursor(best);
       hover(best);
+      onKeyCursor?.(best);
       requestAnimationFrame(() => reveal(best, false));
     } else if ((e.key === 'Enter' || e.key === ' ') && cursor !== null && onPaint) {
       e.preventDefault();
@@ -601,53 +604,54 @@ export function MapView({ state, view, overlay, highlight, onPaint, onHover, bac
         const planned = overlay?.layout[i] ?? null;
         const existing = t.improvement;
         const removed = overlay?.removed.has(i) ?? false;
+        // Buildings outside your territory are someone else's: drawn faded.
+        const out = t.city === null;
         const els: React.ReactNode[] = [];
         if (existing === 'city') {
           const ci = state.cities.findIndex((c) => c.y * w + c.x === i);
           els.push(<City key="c" cx={cx} cy={cy} color={cityColor(t.city ?? ci)} />);
         } else if (overlay) {
-          if (planned) els.push(<Badge key="b" kind={planned} cx={cx} cy={cy} planned={planned !== existing} />);
+          if (planned) els.push(<Badge key="b" kind={planned} cx={cx} cy={cy} planned={planned !== existing} income={overlay.marketIncome.get(i)} />);
           else if (removed && existing !== 'none' && existing !== 'other') els.push(<Badge key="b" kind={existing} cx={cx} cy={cy} planned={false} gone />);
-          else if (existing === 'other') els.push(<Other key="o" cx={cx} cy={cy} />);
+          else if (existing === 'other') els.push(<Other key="o" cx={cx} cy={cy} out={out} />);
           if (removed) els.push(<Removed key="r" cx={cx} cy={cy} small={!!planned} />);
         } else if (existing !== 'none' && existing !== 'other') {
-          els.push(<Badge key="b" kind={existing} cx={cx} cy={cy} planned={false} />);
+          els.push(<Badge key="b" kind={existing} cx={cx} cy={cy} planned={false} out={out} />);
         } else if (existing === 'other') {
-          els.push(<Other key="o" cx={cx} cy={cy} />);
+          els.push(<Other key="o" cx={cx} cy={cy} out={out} />);
         }
         return els.length ? <g key={i}>{els}</g> : null;
       }),
     [order, state.tiles, state.cities, overlay, centers, w],
   );
 
-  // Step numbers, market income and enemy units, on top of the buildings.
+  // Enemy units only matter on and next to your territory; the rest would be clutter.
+  const enemies = useMemo(() => nearbyEnemies(state), [state]);
+
+  // Step numbers and enemy units, on top of the buildings. Each sits in the gap just right of
+  // its tile's building, which no neighbour's building reaches.
   const labels = useMemo(
     () =>
       order.map((i) => {
         const t = state.tiles[i];
         const [cx, cy] = centers[i];
         const steps = overlay?.steps.get(i);
-        const inc = overlay?.marketIncome.get(i);
-        if (!steps?.length && inc === undefined && !t.enemy) return null;
+        const enemy = enemies.has(i);
+        if (!steps?.length && !enemy) return null;
         // The step that finishes the tile (its building), with earlier ones listed in the tooltip.
         const last = steps?.[steps.length - 1];
-        const isCity = t.improvement === 'city';
-        // Steps on the right, enemies on the left (the other way round on a city, whose name sits below).
-        const sx = isCity ? cx - 22 : cx + 22;
-        const ex = isCity ? cx + 22 : cx - 22;
+        const r = last === undefined ? null : stepRect(cx, cy, last);
+        // An enemy on an empty tile stands in the middle; next to a building it takes the gap.
+        const drawn = drawnKind(t, i, overlay ?? null) !== null;
+        const [ex, ey] = !drawn ? [cx, cy - 1] : r ? [cx - 23, cy - 1] : [cx + 23, cy - 1];
         return (
           <g key={i}>
-            {inc !== undefined && (
-              <text className="inc" x={cx} y={cy - 15}>
-                +{inc}★
-              </text>
-            )}
-            {t.enemy && <Enemy cx={ex} cy={cy - 10} />}
-            {last !== undefined && (
+            {enemy && <Enemy cx={ex} cy={ey} small={drawn} />}
+            {r && (
               <g className="stepnum">
                 <title>{`Step${steps!.length > 1 ? 's' : ''} ${steps!.join(', ')}`}</title>
-                <circle cx={sx} cy={cy - 10} r={9.5} />
-                <text x={sx} y={cy - 5.9}>
+                <rect x={r[0]} y={r[1]} width={r[2] - r[0]} height={r[3] - r[1]} rx={6.5} />
+                <text x={(r[0] + r[2]) / 2} y={cy + 2.8}>
                   {last}
                 </text>
               </g>
@@ -655,12 +659,12 @@ export function MapView({ state, view, overlay, highlight, onPaint, onHover, bac
           </g>
         );
       }),
-    [order, state.tiles, overlay, centers],
+    [order, state.tiles, overlay, centers, enemies],
   );
 
-  // City names go below the city, or above it when that would hide fewer buildings and labels.
+  // City names go under the city, or the nearest spot that hides no building, step or other name.
   const cityNames = useMemo(() => {
-    const busy = occupiedRects(state, overlay ?? null, centers);
+    const busy = occupiedRects(state, overlay ?? null, centers, enemies);
     return state.cities.map((c, ci) => {
       const i = c.y * w + c.x;
       if (c.x < 0 || c.y < 0 || c.x >= w || c.y >= h) return null;
@@ -668,24 +672,26 @@ export function MapView({ state, view, overlay, highlight, onPaint, onHover, bac
       const name = c.name.trim() || `City ${ci + 1}`;
       const { total, below } = labelSize(name, c.level);
       let best: Rect = [0, 0, 0, 0];
-      let bestAt: [number, number] = [0, 21];
+      let bestAt: [number, number] = LABEL_SPOTS[0];
       let bestHit = Infinity;
-      LABEL_SPOTS.forEach(([dx, dy], k) => {
+      for (const [dx, dy] of LABEL_SPOTS) {
         const r: Rect = [cx + dx - total / 2, cy + dy - 9, cx + dx + total / 2, cy + dy + 9 + below];
-        // The usual spot (under the city) wins unless another one hides clearly less.
-        const hit = busy.reduce((a, b) => a + overlap(r, b), 0) + k * 60;
+        // Hiding anything costs far more than moving away; markets and planned buildings most.
+        const hit = busy.reduce((a, [b, weight]) => a + overlap(r, b) * weight, 0) + Math.abs(dx) + Math.abs(dy - LABEL_SPOTS[0][1]);
         if (hit < bestHit) {
           bestHit = hit;
           best = r;
           bestAt = [dx, dy];
         }
-      });
-      busy.push(best);
+      }
+      busy.push([best, 400]);
       return <CityLabel key={ci} cx={cx + bestAt[0]} cy={cy + bestAt[1]} name={name} level={c.level} population={c.population} color={cityColor(state.tiles[i]?.city ?? ci)} />;
     });
-  }, [state, overlay, centers, w, h]);
+  }, [state, overlay, centers, w, h, enemies]);
 
-  const hasEnemy = useMemo(() => state.tiles.some((t) => t.enemy), [state.tiles]);
+  const hasEnemy = enemies.size > 0;
+  const hasOther = useMemo(() => state.tiles.some((t) => t.improvement === 'other'), [state.tiles]);
+  const minZoom = limits().min;
   const z = zoom;
 
   return (
@@ -720,6 +726,7 @@ export function MapView({ state, view, overlay, highlight, onPaint, onHover, bac
             const c = cursor ?? Math.floor(h / 2) * w + Math.floor(w / 2);
             setCursor(c);
             hover(c);
+            onKeyCursor?.(c);
           }}
           role="application"
           aria-label={`Map, ${w} by ${h} tiles. Arrow keys move the cursor${onPaint ? ', Enter paints with the selected tool' : ''}. Plus and minus zoom, 0 fits your territory. Keys 1 to 6 pick a terrain, M picks Move.`}
@@ -742,13 +749,13 @@ export function MapView({ state, view, overlay, highlight, onPaint, onHover, bac
           <g className="borders" pointerEvents="none">
             {borders}
           </g>
+          {/* City names under the buildings, so a name never hides one (they're placed to avoid them anyway). */}
+          <g pointerEvents="none" className="citynames">
+            {cityNames}
+          </g>
           <g pointerEvents="none">{markers}</g>
           <g pointerEvents="none" className="maplabels">
             {labels}
-          </g>
-          {/* City names on top of the plan labels, so they stay readable. */}
-          <g pointerEvents="none" className="citynames">
-            {cityNames}
           </g>
           {flashing && flashing.tile < centers.length && <polygon key={flashing.n} className="flash" points={diamond(...centers[flashing.tile])} pointerEvents="none" />}
           {highlight != null && highlight < centers.length && <polygon className="hl-ring" points={diamond(...centers[highlight], 1.08)} pointerEvents="none" />}
@@ -761,7 +768,7 @@ export function MapView({ state, view, overlay, highlight, onPaint, onHover, bac
             <path d="M8 3v10M3 8h10" />
           </svg>
         </button>
-        <button type="button" className="icon" title="Zoom out (−)" aria-label="Zoom out" onClick={() => zoomTo(zoom / ZOOM_STEP)}>
+        <button type="button" className="icon" title="Zoom out (−)" aria-label="Zoom out" onClick={() => zoomTo(zoom / ZOOM_STEP)} disabled={zoom <= minZoom + 1e-3}>
           <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
             <path d="M3 8h10" />
           </svg>
@@ -777,7 +784,7 @@ export function MapView({ state, view, overlay, highlight, onPaint, onHover, bac
           </svg>
         </button>
       </div>
-      {(overlay || hasEnemy) && (
+      {(overlay || hasEnemy || hasOther) && (
         <div className="maplegend small" aria-hidden="true">
           {overlay && (
             <>
@@ -787,10 +794,13 @@ export function MapView({ state, view, overlay, highlight, onPaint, onHover, bac
               <LegendItem label="Planned">
                 <Badge kind="sawmill" cx={18} cy={11} planned />
               </LegendItem>
-              <LegendItem label="Step" w={24}>
+              <LegendItem label="Market income">
+                <Badge kind="market" cx={18} cy={11} planned={false} income={8} />
+              </LegendItem>
+              <LegendItem label="Step" w={20}>
                 <g className="stepnum">
-                  <circle cx={12} cy={10} r={9} />
-                  <text x={12} y={14}>
+                  <rect x={2} y={3.5} width={16} height={13} rx={6.5} />
+                  <text x={10} y={13.8}>
                     1
                   </text>
                 </g>
@@ -800,9 +810,14 @@ export function MapView({ state, view, overlay, highlight, onPaint, onHover, bac
               </LegendItem>
             </>
           )}
+          {hasOther && (
+            <LegendItem label="Other building" w={18}>
+              <Other cx={9} cy={10} out={false} />
+            </LegendItem>
+          )}
           {hasEnemy && (
             <LegendItem label="Enemy unit" w={24}>
-              <Enemy cx={12} cy={10} />
+              <Enemy cx={12} cy={10} small={false} />
             </LegendItem>
           )}
         </div>
@@ -870,33 +885,50 @@ function Metal({ cx, cy }: { cx: number; cy: number }) {
 
 const BIG: Partial<Record<BuildingKind, true>> = { market: true, sawmill: true, windmill: true, forge: true };
 
-const badgeSize = (kind: BuildingKind) => (BIG[kind] ? [34, 21] : [28, 18]);
-
-function Badge({ kind, cx, cy, planned, gone }: { kind: BuildingKind; cx: number; cy: number; planned: boolean; gone?: boolean }) {
+/**
+ * Badge width and height. Tiles are 64×32 and diagonal neighbours sit 32 across and 16 down,
+ * so badges up to 32 wide never overlap a neighbour's, and leave a 13px-high gap to their
+ * right (between the neighbours above and below) for the step number.
+ */
+const badgeSize = (kind: BuildingKind) => (BIG[kind] ? [32, 19] : [28, 16]);
+export const badgeRect = (kind: BuildingKind, cx: number, cy: number): Rect => {
   const [bw, bh] = badgeSize(kind);
+  return [cx - bw / 2, cy - bh / 2 - 1, cx + bw / 2, cy + bh / 2 - 1];
+};
+
+/** The step number's chip: in the gap right of the tile's building, just touching it. */
+export function stepRect(cx: number, cy: number, n: number): Rect {
+  const cw = Math.max(16, 7 + String(n).length * 6.5);
+  return [cx + 13, cy - 7.5, cx + 13 + cw, cy + 5.5];
+}
+
+function Badge({ kind, cx, cy, planned, gone, out, income }: { kind: BuildingKind; cx: number; cy: number; planned: boolean; gone?: boolean; out?: boolean; income?: number }) {
+  const [x0, y0, x1, y1] = badgeRect(kind, cx, cy);
+  // A market in a plan shows what it earns instead of its name.
+  const text = kind === 'market' && income !== undefined ? `+${income}★` : BUILDING_ABBR[kind];
   return (
-    <g className={`bld b-${kind}${planned ? ' ghost' : ''}${gone ? ' gone' : ''}`}>
-      <title>{`${BUILDING_NAMES[kind]}${planned ? ' (planned)' : gone ? ' (removed)' : ''}`}</title>
-      <rect x={cx - bw / 2} y={cy - bh / 2 - 1} width={bw} height={bh} rx={5} />
-      <text x={cx} y={cy + (BIG[kind] ? 3.6 : 3.2)} className={BIG[kind] ? 'big' : undefined}>
-        {BUILDING_ABBR[kind]}
+    <g className={`bld b-${kind}${planned ? ' ghost' : ''}${gone ? ' gone' : ''}${out ? ' out' : ''}`}>
+      <title>{`${BUILDING_NAMES[kind]}${planned ? ' (planned)' : gone ? ' (removed)' : ''}${income !== undefined ? `: +${income}★ per turn` : ''}`}</title>
+      <rect x={x0} y={y0} width={x1 - x0} height={y1 - y0} rx={5} />
+      <text x={cx} y={cy + (BIG[kind] ? 3.6 : 3.2)} className={BIG[kind] ? (text.length > 2 ? 'big inc' : 'big') : undefined}>
+        {text}
       </text>
     </g>
   );
 }
 
-function Other({ cx, cy }: { cx: number; cy: number }) {
+function Other({ cx, cy, out }: { cx: number; cy: number; out: boolean }) {
   return (
-    <rect className="other" x={cx - 7} y={cy - 7} width={14} height={14} rx={3}>
-      <title>Other building</title>
+    <rect className={`other${out ? ' out' : ''}`} x={cx - 7} y={cy - 7} width={14} height={14} rx={3}>
+      <title>Other building (temple, port…)</title>
     </rect>
   );
 }
 
 function Removed({ cx, cy, small }: { cx: number; cy: number; small: boolean }) {
   // Next to a new building the cross moves to the corner, so the new badge stays readable.
-  const x = small ? cx - 20 : cx;
-  const y = small ? cy + 4 : cy;
+  const x = small ? cx - 19 : cx;
+  const y = small ? cy - 1 : cy;
   const r = small ? 4.5 : 7;
   return (
     <g className="removed">
@@ -907,54 +939,79 @@ function Removed({ cx, cy, small }: { cx: number; cy: number; small: boolean }) 
   );
 }
 
-function Enemy({ cx, cy }: { cx: number; cy: number }) {
+/** Radius of an enemy marker: full size on an empty tile, smaller in the gap beside a building. */
+const enemyR = (small: boolean) => (small ? 6.5 : 9);
+
+function Enemy({ cx, cy, small }: { cx: number; cy: number; small: boolean }) {
   return (
-    <g className="enemy">
+    <g className="enemy" transform={`translate(${cx} ${cy}) scale(${enemyR(small) / 9})`}>
       <title>Enemy unit</title>
-      <circle cx={cx} cy={cy} r={9} />
-      <path d={`M${cx},${cy - 5.5}l4.5,1.8v2.6c0,3 -2,4.8 -4.5,6c-2.5,-1.2 -4.5,-3 -4.5,-6v-2.6z`} />
+      <circle r={9} />
+      <path d="M0,-5.5l4.5,1.8v2.6c0,3 -2,4.8 -4.5,6c-2.5,-1.2 -4.5,-3 -4.5,-6v-2.6z" />
     </g>
   );
+}
+
+/** Tiles with an enemy unit that are in your territory or next to it. */
+export function nearbyEnemies(state: GameState): Set<number> {
+  const { width: w, height: h, tiles } = state;
+  const out = new Set<number>();
+  tiles.forEach((t, i) => {
+    if (!t.enemy) return;
+    const x = i % w;
+    const y = Math.floor(i / w);
+    for (let dy = -1; dy <= 1; dy++)
+      for (let dx = -1; dx <= 1; dx++) {
+        const nx = x + dx;
+        const ny = y + dy;
+        if (nx >= 0 && ny >= 0 && nx < w && ny < h && tiles[ny * w + nx].city !== null) {
+          out.add(i);
+          return;
+        }
+      }
+  });
+  return out;
 }
 
 function City({ cx, cy, color }: { cx: number; cy: number; color: string }) {
   return (
     <g className="city">
-      <path d={`M${cx - 13},${cy + 6} v-16 h5 v4 h4 v-6 h8 v6 h4 v-4 h5 v16 z`} fill={color} />
+      <path d={`M${cx - 13},${cy + 6} v-15 h5 v3 h4 v-4 h8 v4 h4 v-3 h5 v15 z`} fill={color} />
       <path className="door" d={`M${cx - 2.5},${cy + 6} v-5 a2.5,2.5 0 0 1 5,0 v5 z`} />
     </g>
   );
 }
 
-type Rect = [number, number, number, number];
-/** Where a city's name may go, relative to the city tile, in order of preference. */
+export type Rect = [number, number, number, number];
+/** Where a city's name may go, relative to the city tile: under it first, else anywhere up to about two tiles away. */
 const LABEL_SPOTS: [number, number][] = [
   [0, 21],
-  [0, -29],
-  [0, 34],
-  [-22, 21],
-  [22, 21],
-  [-22, -29],
-  [22, -29],
+  ...Array.from({ length: 17 }, (_, a) => -64 + a * 8).flatMap((dy) => Array.from({ length: 13 }, (_, b) => -96 + b * 16).map((dx): [number, number] => [dx, dy])),
 ];
 const overlap = (a: Rect, b: Rect) => Math.max(0, Math.min(a[2], b[2]) - Math.max(a[0], b[0])) * Math.max(0, Math.min(a[3], b[3]) - Math.max(a[1], b[1]));
 
-/** Screen boxes of everything drawn on top of the tiles (buildings, steps, income, enemies). */
-function occupiedRects(state: GameState, overlay: Overlay | null, centers: [number, number][]): Rect[] {
-  const out: Rect[] = [];
+/** What's drawn on a tile: a city, a building badge (planned, kept or removed), another building, or nothing. */
+function drawnKind(t: GameState['tiles'][number], i: number, overlay: Overlay | null): BuildingKind | 'city' | 'other' | null {
+  if (t.improvement === 'city') return 'city';
+  const kind = overlay ? (overlay.layout[i] ?? (overlay.removed.has(i) || t.improvement === 'other' ? t.improvement : 'none')) : t.improvement;
+  return kind === 'none' ? null : (kind as BuildingKind | 'other');
+}
+
+/**
+ * Screen boxes of everything drawn on top of the tiles, with how much hiding each one costs
+ * a city name: markets and planned buildings most.
+ */
+function occupiedRects(state: GameState, overlay: Overlay | null, centers: [number, number][], enemies: Set<number>): [Rect, number][] {
+  const out: [Rect, number][] = [];
   state.tiles.forEach((t, i) => {
     const [cx, cy] = centers[i];
-    const isCity = t.improvement === 'city';
-    const kind = isCity ? null : overlay ? (overlay.layout[i] ?? (overlay.removed.has(i) || t.improvement === 'other' ? t.improvement : null)) : t.improvement;
-    if (isCity) out.push([cx - 13, cy - 10, cx + 13, cy + 6]);
-    else if (kind === 'other') out.push([cx - 7, cy - 7, cx + 7, cy + 7]);
-    else if (kind && kind !== 'none') {
-      const [bw, bh] = badgeSize(kind as BuildingKind);
-      out.push([cx - bw / 2, cy - bh / 2 - 1, cx + bw / 2, cy + bh / 2 - 1]);
-    }
-    if (overlay?.steps.get(i)?.length) out.push(isCity ? [cx - 32, cy - 20, cx - 12, cy] : [cx + 12, cy - 20, cx + 32, cy]);
-    if (overlay?.marketIncome.has(i)) out.push([cx - 16, cy - 28, cx + 16, cy - 13]);
-    if (t.enemy) out.push(isCity ? [cx + 13, cy - 19, cx + 31, cy - 1] : [cx - 31, cy - 19, cx - 13, cy - 1]);
+    const kind = drawnKind(t, i, overlay);
+    if (kind === 'city') out.push([[cx - 13, cy - 10, cx + 13, cy + 6], 400]);
+    else if (kind === 'other') out.push([[cx - 7, cy - 7, cx + 7, cy + 7], 100]);
+    else if (kind) out.push([badgeRect(kind, cx, cy), kind === 'market' || (overlay && overlay.layout[i] !== t.improvement) ? 1000 : 400]);
+    const steps = overlay?.steps.get(i);
+    if (steps?.length) out.push([stepRect(cx, cy, steps[steps.length - 1]), 1000]);
+    if (enemies.has(i)) out.push([[cx - 30, cy - 10, cx + 30, cy + 8], 200]);
   });
   return out;
 }
@@ -967,22 +1024,31 @@ function labelSize(name: string, level?: number) {
   return { lv, nw, lw, total: nw + lw, below: lv ? 7 : 0 };
 }
 
-/** Black or white text, whichever reads better on a city colour. */
-function inkOn(hex: string) {
+const DARK_INK = '#1f2328';
+
+/** WCAG relative luminance of a #rrggbb colour. */
+function luminance(hex: string) {
   const n = parseInt(hex.slice(1), 16);
-  const lum = 0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255);
-  return lum > 150 ? '#1f2328' : '#ffffff';
+  const lin = (c: number) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+  return 0.2126 * lin((n >> 16) / 255) + 0.7152 * lin(((n >> 8) & 255) / 255) + 0.0722 * lin((n & 255) / 255);
+}
+const contrast = (a: number, b: number) => (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+
+/** Black or white text, whichever has more contrast (WCAG) on a city colour. */
+export function inkOn(hex: string) {
+  const bg = luminance(hex);
+  return contrast(bg, 1) >= contrast(bg, luminance(DARK_INK)) ? '#ffffff' : DARK_INK;
 }
 
 function CityLabel({ cx, cy, name, level, population, color }: { cx: number; cy: number; name: string; level?: number; population?: number; color: string }) {
   const { lv, nw, lw, total } = labelSize(name, level);
   const x0 = cx - total / 2;
-  // Population pips under the label, as in the game: level + 1 to grow.
+  // Population pips under the label, as in the game: level + 1 to grow (at most 12 drawn).
   const pips = lv ? Math.min(level! + 1, 12) : 0;
   const filled = clamp(population ?? 0, 0, pips);
   return (
     <g className="citylabel">
-      <title>{`${name}${lv ? `, level ${level}` : ''}${population !== undefined && lv ? `, population ${population} of ${pips}` : ''}`}</title>
+      <title>{`${name}${lv ? `, level ${level}` : ''}${population !== undefined && lv ? `, population ${population} of ${level! + 1}` : ''}`}</title>
       <rect x={x0} y={cy - 9} width={total} height={18} rx={9} className="pill" stroke={color} />
       {lv && <path d={`M${x0 + nw},${cy - 9}h${lw - 9}a9,9 0 0 1 0,18h${-(lw - 9)}z`} fill={color} />}
       <text x={x0 + nw / 2} y={cy + 4.2} className="nm">

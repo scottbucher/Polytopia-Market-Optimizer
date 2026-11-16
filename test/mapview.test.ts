@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { GAME_VIEW, isGameView, loadView, tileCenter, type View } from '../src/ui/MapView';
+import { BUILDING_KINDS } from '../src/data/rules';
+import { blankState } from '../src/model/defaults';
+import { badgeRect, cityColor, GAME_VIEW, inkOn, isGameView, loadView, nearbyEnemies, type Rect, stepRect, tileCenter, type View } from '../src/ui/MapView';
 
 // Screen coordinates: x grows to the right, y grows downwards.
 describe('map view', () => {
@@ -35,4 +37,38 @@ describe('map view', () => {
       expect(at(0, h - 1)[0]).toBe(Math.min(...xs));
     });
   }
+});
+
+const overlapArea = (a: Rect, b: Rect) => Math.max(0, Math.min(a[2], b[2]) - Math.max(a[0], b[0])) * Math.max(0, Math.min(a[3], b[3]) - Math.max(a[1], b[1]));
+
+describe('map marks', () => {
+  // Screen offsets of the eight neighbours of a tile, in any view.
+  const v: View = GAME_VIEW;
+  const [cx, cy] = tileCenter(v, 5, 5, 12);
+  const neighbours = [6, 7, 8, 11, 13, 16, 17, 18].map((i) => tileCenter(v, 5, 5, i));
+
+  it("a step number never covers a neighbour's building, and neighbours' buildings never overlap", () => {
+    for (const n of [1, 9, 28, 105])
+      for (const own of BUILDING_KINDS)
+        for (const kind of BUILDING_KINDS)
+          for (const [nx, ny] of neighbours) {
+            expect(overlapArea(stepRect(cx, cy, n), badgeRect(kind, nx, ny))).toBe(0);
+            expect(overlapArea(badgeRect(own, cx, cy), badgeRect(kind, nx, ny))).toBe(0);
+          }
+  });
+
+  it('city levels use whichever text colour has more contrast', () => {
+    expect(inkOn('#37b24d')).toBe('#1f2328');
+    expect(inkOn('#1c7ed6')).toBe('#ffffff');
+    expect(inkOn('#f59f00')).toBe('#1f2328');
+    for (let i = 0; i < 10; i++) expect(['#ffffff', '#1f2328']).toContain(inkOn(cityColor(i)));
+  });
+
+  it('shows enemy units only in and next to your territory', () => {
+    const st = blankState(6, 6);
+    st.tiles[0].city = 0; // (0,0)
+    for (const i of [1, 7, 2, 14, 35]) st.tiles[i].enemy = true; // (1,0) (1,1) next to it; (2,0) (2,2) (5,5) not
+    st.tiles[0].enemy = true;
+    expect([...nearbyEnemies(st)].sort((a, b) => a - b)).toEqual([0, 1, 7]);
+  });
 });
